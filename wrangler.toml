@@ -1,0 +1,43 @@
+# Cloudflare Workers Configuration for Kuddl Platform
+name = "kuddl-backend-dev"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Development server configuration
+[dev]
+port = 8787
+
+# Environment Variables
+# Configure secrets in Cloudflare Pages Environment Variables settings
+[vars]
+ENVIRONMENT = "development"
+
+# Production Environment
+[env.production]
+name = "kuddl-backend-prod"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+
+# Database Configuration (D1)
+[[d1_databases]]
+binding = "DB"
+database_name = "kuddl-development"
+database_id = "your-database-id"
+
+# R2 Storage Configuration
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "kuddl-storage"
+
+# Production Database
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "kuddl-prod"
+database_id = "your-prod-database-id"
+
+# Production R2 Storage
+[[env.production.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "kuddl-storage-prod"

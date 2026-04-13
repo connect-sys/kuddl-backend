@@ -84,7 +84,6 @@ temp/
 .vscode/*
 !.vscode/extensions.json
 .idea
-wrangler.toml
 .wrangler/
 .DS_Store
 *.suo
