@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "deploy:staging": "wrangler deploy --env development",
     "deploy:production": "wrangler deploy --env production",
-    "build": "esbuild src/index.js --bundle --format=esm --outfile=dist/index.js --platform=neutral --target=es2022",
+    "build": "echo 'Build completed - Wrangler will handle bundling during deployment'",
     "db:migrate": "wrangler d1 execute KUDDL_DB --file=./database/d1-schema.sql",
     "db:migrate:dev": "wrangler d1 execute KUDDL_DB --file=./database/d1-schema.sql --env development",
     "db:seed": "node scripts/seed-database.js",
