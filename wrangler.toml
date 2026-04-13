@@ -15,14 +15,7 @@ port = 8787
 ENVIRONMENT = "development"
 R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
 
-# Production Environment
-[env.production]
-name = "kuddl-backend-prod"
-
-[env.production.vars]
-ENVIRONMENT = "production"
-
-# Database Configuration (D1)
+# Database Configuration (D1) - Development
 [[d1_databases]]
 binding = "DB"
 database_name = "kuddl-dev"
@@ -33,8 +26,14 @@ database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 # binding = "BUCKET"
 # bucket_name = "kuddl-storage"
 
-# Production Database
-[env.production.d1_databases]
+# Production Environment
+[env.production]
+name = "kuddl-backend-prod"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+
+[[env.production.d1_databases]]
 binding = "DB"
 database_name = "kuddl-prod"
 database_id = "27348837-2b95-4583-8c27-325bf0a1652c"

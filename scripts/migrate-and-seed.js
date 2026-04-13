@@ -40,8 +40,8 @@ const sqlFiles = {
  */
 function executeD1Command(dbName, sqlFile, env = null) {
   try {
-    const envFlag = env ? `--env ${env}` : '';
-    const command = `npx wrangler d1 execute ${dbName} --file=${sqlFile} ${envFlag}`.trim();
+    const envFlag = env === 'production' ? '--env production' : '';
+    const command = `npx wrangler d1 execute ${dbName} --file=${sqlFile} --remote ${envFlag}`.trim();
     
     console.log(`📦 Executing: ${command}`);
     const result = execSync(command, { 
@@ -62,8 +62,8 @@ function executeD1Command(dbName, sqlFile, env = null) {
  */
 function executeD1SQL(dbName, sql, env = null) {
   try {
-    const envFlag = env ? `--env ${env}` : '';
-    const command = `npx wrangler d1 execute ${dbName} --command="${sql}" ${envFlag}`.trim();
+    const envFlag = env === 'production' ? '--env production' : '';
+    const command = `npx wrangler d1 execute ${dbName} --command="${sql}" --remote ${envFlag}`.trim();
     
     console.log(`📦 Executing SQL on ${dbName}`);
     const result = execSync(command, { 
@@ -84,8 +84,8 @@ function executeD1SQL(dbName, sql, env = null) {
  */
 function checkDatabase(dbName, env = null) {
   try {
-    const envFlag = env ? `--env ${env}` : '';
-    const command = `npx wrangler d1 execute ${dbName} --command="SELECT 1" ${envFlag}`.trim();
+    const envFlag = env === 'production' ? '--env production' : '';
+    const command = `npx wrangler d1 execute ${dbName} --command="SELECT 1" --remote ${envFlag}`.trim();
     
     execSync(command, { 
       encoding: 'utf8',
@@ -112,31 +112,31 @@ async function migrateAndSeedDatabase(dbConfig) {
   try {
     // Check database accessibility
     console.log(`\n1️⃣ Checking database accessibility...`);
-    if (!checkDatabase(name, env === 'development' ? null : env)) {
+    if (!checkDatabase(name, env)) {
       throw new Error(`Database ${name} is not accessible`);
     }
     
     // Create schema
     console.log(`\n2️⃣ Creating database schema...`);
-    executeD1Command(name, sqlFiles.schema, env === 'development' ? null : env);
+    executeD1Command(name, sqlFiles.schema, env);
     
     // Seed categories and subcategories
     console.log(`\n3️⃣ Seeding categories and subcategories...`);
-    executeD1Command(name, sqlFiles.categories, env === 'development' ? null : env);
+    executeD1Command(name, sqlFiles.categories, env);
     
     // Seed services
     console.log(`\n4️⃣ Seeding services...`);
-    executeD1Command(name, sqlFiles.services, env === 'development' ? null : env);
+    executeD1Command(name, sqlFiles.services, env);
     
     // Seed pincodes
     console.log(`\n5️⃣ Seeding pincodes...`);
-    executeD1Command(name, sqlFiles.pincodes, env === 'development' ? null : env);
+    executeD1Command(name, sqlFiles.pincodes, env);
     
     // Verify data
     console.log(`\n6️⃣ Verifying seeded data...`);
-    const categoriesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM categories', env === 'development' ? null : env);
-    const servicesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM services', env === 'development' ? null : env);
-    const pincodesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM pincodes', env === 'development' ? null : env);
+    const categoriesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM categories', env);
+    const servicesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM services', env);
+    const pincodesCount = executeD1SQL(name, 'SELECT COUNT(*) as count FROM pincodes', env);
     
     console.log(`📊 Data verification complete for ${name}`);
     

@@ -412,11 +412,7 @@ CREATE TABLE IF NOT EXISTS profile_progress (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- SQLite sequence table (auto-managed by SQLite)
-CREATE TABLE IF NOT EXISTS sqlite_sequence (
-    name TEXT,
-    seq INTEGER
-);
+-- Note: sqlite_sequence table is automatically managed by SQLite for AUTOINCREMENT columns
 
 -- =============================================
 -- INDEXES FOR PERFORMANCE
