@@ -1,8 +1,9 @@
 # Cloudflare Workers Configuration for Kuddl Platform
-name = "kuddl-backend-dev"
+name = "kuddl-backend"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+# account_id = "your-cloudflare-account-id"
 
 # Development server configuration
 [dev]
