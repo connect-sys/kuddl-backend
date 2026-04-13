@@ -4,19 +4,7 @@
   "main": "src/worker.js",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "ENVIRONMENT": "development"
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "kuddl-development",
-      "database_id": "your-database-id"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "BUCKET",
-      "bucket_name": "kuddl-storage"
-    }
-  ]
+    "ENVIRONMENT": "development",
+    "R2_PUBLIC_URL": "https://dev-assets.kuddl.co"
+  }
 }

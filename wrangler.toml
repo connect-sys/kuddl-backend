@@ -13,6 +13,7 @@ port = 8787
 # Configure secrets in Cloudflare Pages Environment Variables settings
 [vars]
 ENVIRONMENT = "development"
+R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
 
 # Production Environment
 [env.production]
@@ -24,21 +25,16 @@ ENVIRONMENT = "production"
 # Database Configuration (D1)
 [[d1_databases]]
 binding = "DB"
-database_name = "kuddl-development"
-database_id = "your-database-id"
+database_name = "kuddl-dev"
+database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 
-# R2 Storage Configuration
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "kuddl-storage"
+# R2 Storage Configuration - Configure these in Cloudflare Dashboard
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "kuddl-storage"
 
 # Production Database
-[[env.production.d1_databases]]
+[env.production.d1_databases]
 binding = "DB"
 database_name = "kuddl-prod"
-database_id = "your-prod-database-id"
-
-# Production R2 Storage
-[[env.production.r2_buckets]]
-binding = "BUCKET"
-bucket_name = "kuddl-storage-prod"
+database_id = "27348837-2b95-4583-8c27-325bf0a1652c"
