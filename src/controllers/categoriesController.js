@@ -7,7 +7,7 @@ export const getCategories = async (request, env) => {
     console.log('🔍 Getting categories...');
     
     // Get all categories with service count
-    const categories = await env.DB.prepare(`
+    const categories = await env.KUDDL_DB.prepare(`
       SELECT c.*, COUNT(s.id) as service_count 
       FROM categories c
       LEFT JOIN subcategories sub ON c.id = sub.category_id
@@ -19,7 +19,7 @@ export const getCategories = async (request, env) => {
     console.log('📊 Categories result:', categories);
 
     // Get all subcategories
-    const subcategories = await env.DB.prepare(`
+    const subcategories = await env.KUDDL_DB.prepare(`
       SELECT * FROM subcategories 
       ORDER BY category_id, name ASC
     `).all();
@@ -92,7 +92,7 @@ export const getCategoriesByModule = async (request, env) => {
       }));
     }
 
-    const categories = await env.DB.prepare(`
+    const categories = await env.KUDDL_DB.prepare(`
       SELECT * FROM categories 
       WHERE is_active = 1 AND module = ?
       ORDER BY sort_order ASC, name ASC
@@ -134,7 +134,7 @@ export const getSubcategories = async (request, env) => {
       }));
     }
 
-    const subcategories = await env.DB.prepare(`
+    const subcategories = await env.KUDDL_DB.prepare(`
       SELECT * FROM subcategories 
       WHERE is_active = 1 AND category_id = ?
       ORDER BY sort_order ASC, name ASC
@@ -176,7 +176,7 @@ export const getChildSubcategories = async (request, env) => {
       }));
     }
 
-    const childSubcategories = await env.DB.prepare(`
+    const childSubcategories = await env.KUDDL_DB.prepare(`
       SELECT * FROM child_subcategories 
       WHERE is_active = 1 AND subcategory_id = ?
       ORDER BY sort_order ASC, name ASC
@@ -217,7 +217,7 @@ export const createCategory = async (request, env) => {
       }));
     }
 
-    await env.DB.prepare(`
+    await env.KUDDL_DB.prepare(`
       INSERT INTO categories (id, name, description, module, icon, sort_order)
       VALUES (?, ?, ?, ?, ?, ?)
     `).bind(id, name, description || '', module.toUpperCase(), icon || '', sort_order || 0).run();
@@ -257,7 +257,7 @@ export const createSubcategory = async (request, env) => {
       }));
     }
 
-    await env.DB.prepare(`
+    await env.KUDDL_DB.prepare(`
       INSERT INTO subcategories (id, category_id, name, description, sort_order)
       VALUES (?, ?, ?, ?, ?)
     `).bind(id, category_id, name, description || '', sort_order || 0).run();
@@ -312,7 +312,7 @@ export const updateCategory = async (request, env) => {
     updateFields.push('updated_at = CURRENT_TIMESTAMP');
     values.push(categoryId);
     
-    await env.DB.prepare(`
+    await env.KUDDL_DB.prepare(`
       UPDATE categories 
       SET ${updateFields.join(', ')}
       WHERE id = ?
@@ -355,7 +355,7 @@ export const deleteCategory = async (request, env) => {
     }
 
     // Soft delete by setting is_active to 0
-    await env.DB.prepare(`
+    await env.KUDDL_DB.prepare(`
       UPDATE categories 
       SET is_active = 0, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
