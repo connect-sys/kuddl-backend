@@ -1037,35 +1037,25 @@ export async function getTopSubcategories(request, env) {
     const rawLimit = parseInt(url.searchParams.get('limit') || '10', 10);
     const limit = Number.isNaN(rawLimit) ? 10 : Math.min(Math.max(rawLimit, 1), 20);
 
+    // Query subcategories with their service counts
+    // The services table links to subcategories, and subcategories have category_id
     let query = `
       SELECT
-        s.subcategory_id,
-        s.category_id,
-        COALESCE(sc.name, s.subcategory_id) AS subcategory_name,
+        sc.id AS subcategory_id,
+        sc.category_id,
+        sc.name AS subcategory_name,
+        sc.description,
+        sc.icon,
+        sc.image_url,
         COUNT(s.id) AS service_count
-      FROM services s
-      LEFT JOIN providers p ON s.provider_id = p.id
-      LEFT JOIN subcategories sc ON sc.id = s.subcategory_id
-      WHERE COALESCE(s.status, 'active') = 'active'
-        AND s.subcategory_id IS NOT NULL
-        AND TRIM(s.subcategory_id) != ''
-    `;
-    const params = [];
-
-    if (pincode) {
-      query += ` AND (
-        (s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?) OR
-        (s.available_pincodes IS NULL AND p.serviceable_pincodes IS NOT NULL AND p.serviceable_pincodes LIKE ?)
-      )`;
-      params.push(`%${pincode}%`, `%${pincode}%`);
-    }
-
-    query += `
-      GROUP BY s.subcategory_id, s.category_id, COALESCE(sc.name, s.subcategory_id)
-      ORDER BY service_count DESC, subcategory_name ASC
+      FROM subcategories sc
+      LEFT JOIN services s ON s.subcategory_id = sc.id AND COALESCE(s.is_active, 1) = 1
+      WHERE COALESCE(sc.is_active, 1) = 1
+      GROUP BY sc.id, sc.category_id, sc.name, sc.description, sc.icon, sc.image_url
+      ORDER BY service_count DESC, sc.sort_order ASC, sc.name ASC
       LIMIT ?
     `;
-    params.push(limit);
+    const params = [limit];
 
     const result = await env.KUDDL_DB.prepare(query).bind(...params).all();
     const rows = result.results || [];
@@ -1076,6 +1066,9 @@ export async function getTopSubcategories(request, env) {
         subcategory_id: row.subcategory_id,
         category_id: row.category_id,
         subcategory_name: row.subcategory_name,
+        description: row.description,
+        icon: row.icon,
+        image_url: row.image_url,
         service_count: row.service_count
       })),
       total: rows.length
@@ -1087,6 +1080,7 @@ export async function getTopSubcategories(request, env) {
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
       message: 'Failed to fetch top subcategories',
+      error: error.message,
       data: []
     }), {
       status: 500,

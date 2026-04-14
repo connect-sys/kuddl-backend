@@ -21,7 +21,7 @@ R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
 
 # Database Configuration (D1) - Development
 [[d1_databases]]
-binding = "DB"
+binding = "KUDDL_DB"
 database_name = "kuddl-dev"
 database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 
@@ -40,6 +40,6 @@ ENVIRONMENT = "production"
 R2_PUBLIC_URL = "https://prodassets.kuddl.co"
 
 [[env.production.d1_databases]]
-binding = "DB"
+binding = "KUDDL_DB"
 database_name = "kuddl-prod"
 database_id = "27348837-2b95-4583-8c27-325bf0a1652c"
