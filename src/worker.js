@@ -6861,6 +6861,25 @@ export default {
     
     try {
       const response = await router.handle(request, env, ctx);
+      
+      // If no route matched, return 404 with CORS
+      if (!response) {
+        return new Response(JSON.stringify({
+          success: false,
+          message: 'Route not found',
+          path: new URL(request.url).pathname
+        }), {
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Access-Control-Allow-Headers, X-API-Key, X-Client-Version',
+            'Access-Control-Max-Age': '86400',
+          }
+        });
+      }
+      
       // Ensure CORS headers on every response
       response.headers.set('Access-Control-Allow-Origin', '*');
       response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
