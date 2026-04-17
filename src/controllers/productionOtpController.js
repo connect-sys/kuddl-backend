@@ -130,8 +130,8 @@ export async function sendProductionOTP(request, env) {
 
     // Store new OTP in database
     await env.KUDDL_DB.prepare(
-      'INSERT INTO otp_verifications (phone, otp, expires_at) VALUES (?, ?, ?)'
-    ).bind(formattedPhone, otp, expiry).run();
+      'INSERT INTO otp_verifications (phone, otp, expires_at, purpose) VALUES (?, ?, ?, ?)'
+    ).bind(formattedPhone, otp, expiry, 'login').run();
 
     // Send SMS via Twilio (with fallback for testing)
     try {
@@ -146,7 +146,7 @@ export async function sendProductionOTP(request, env) {
       if (isTestMode || !hasValidCredentials) {
         console.log('🔧 Test mode or missing Twilio credentials - OTP stored but SMS not sent');
         console.log(`📱 OTP for ${formattedPhone}: ${otp}`);
-        
+
         return addCorsHeaders(new Response(JSON.stringify({
           success: true,
           message: 'OTP sent successfully',
@@ -159,7 +159,7 @@ export async function sendProductionOTP(request, env) {
       }
 
       const auth = btoa(`${twilioAccountSid}:${twilioAuthToken}`);
-      
+
       const body = new URLSearchParams({
         MessagingServiceSid: messagingServiceSid,
         To: formattedPhone,
@@ -186,7 +186,7 @@ export async function sendProductionOTP(request, env) {
 
     } catch (smsError) {
       console.error('Failed to send SMS:', smsError);
-      
+
       // Delete the OTP from database if SMS failed
       await env.KUDDL_DB.prepare(
         'DELETE FROM otp_verifications WHERE phone = ? AND otp = ?'
@@ -349,12 +349,12 @@ export async function verifyProductionOTP(request, env) {
         // Create new parent record
         parentId = crypto.randomUUID();
         const now = new Date().toISOString();
-        
+
         await env.KUDDL_DB.prepare(`
           INSERT INTO parents (id, phone, full_name, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?)
         `).bind(parentId, formattedPhone, 'User', now, now).run();
-        
+
         console.log('✅ Created new parent record with ID:', parentId);
       }
 
@@ -439,8 +439,8 @@ export async function sendPartnerProductionOTP(request, env) {
 
     // Store new OTP in database
     await env.KUDDL_DB.prepare(
-      'INSERT INTO otp_verifications (phone, otp, expires_at) VALUES (?, ?, ?)'
-    ).bind(formattedPhone, otp, expiry).run();
+      'INSERT INTO otp_verifications (phone, otp, expires_at, purpose) VALUES (?, ?, ?, ?)'
+    ).bind(formattedPhone, otp, expiry, 'partner_login').run();
 
     // Send SMS via Twilio (with fallback for testing)
     try {
@@ -455,7 +455,7 @@ export async function sendPartnerProductionOTP(request, env) {
       if (isTestMode || !hasValidCredentials) {
         console.log('🔧 Test mode or missing Twilio credentials - Partner OTP stored but SMS not sent');
         console.log(`📱 Partner OTP for ${formattedPhone}: ${otp}`);
-        
+
         return addCorsHeaders(new Response(JSON.stringify({
           success: true,
           message: 'OTP sent successfully',
@@ -468,7 +468,7 @@ export async function sendPartnerProductionOTP(request, env) {
       }
 
       const auth = btoa(`${twilioAccountSid}:${twilioAuthToken}`);
-      
+
       const body = new URLSearchParams({
         MessagingServiceSid: messagingServiceSid,
         To: formattedPhone,
@@ -495,7 +495,7 @@ export async function sendPartnerProductionOTP(request, env) {
 
     } catch (smsError) {
       console.error('Failed to send partner SMS:', smsError);
-      
+
       // Delete the OTP from database if SMS failed
       await env.KUDDL_DB.prepare(
         'DELETE FROM otp_verifications WHERE phone = ? AND otp = ?'
@@ -550,8 +550,8 @@ export async function verifyPartnerProductionOTP(request, env) {
     }
 
     // Normalize phone number
-    const formattedPhone = phoneNumber.startsWith('+91') 
-      ? phoneNumber 
+    const formattedPhone = phoneNumber.startsWith('+91')
+      ? phoneNumber
       : `+91${phoneNumber.replace(/^\+?91?/, '')}`;
 
     console.log('Formatted phone for partner verification:', formattedPhone);
@@ -641,27 +641,25 @@ export async function verifyPartnerProductionOTP(request, env) {
         providerId = crypto.randomUUID();
         isNewUser = true;
         const now = new Date().toISOString();
-        
+
         await env.KUDDL_DB.prepare(`
-          INSERT INTO providers (id, phone, email, first_name, last_name, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO providers (id, phone, email, name, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `).bind(
-          providerId, 
-          formattedPhone, 
-          '', 
-          'Partner', 
-          '', 
+          providerId,
+          formattedPhone,
+          '',
+          'Partner',
           1,
-          now, 
+          now,
           now
         ).run();
-        
+
         providerData = {
           id: providerId,
           phone: formattedPhone,
           email: '',
-          first_name: 'Partner',
-          last_name: ''
+          name: 'Partner'
         };
         console.log('✅ Created new provider record with ID:', providerId);
       }
@@ -693,13 +691,13 @@ export async function verifyPartnerProductionOTP(request, env) {
       type: 'refresh',
       exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
     }, env.JWT_SECRET);
-    
+
     // Calculate profile completion for partners based on essential fields
-    const hasEssentialFields = providerData.first_name && 
-                               providerData.email && 
-                               providerData.service_categories && 
-                               providerData.account_holder_name && 
-                               providerData.account_number;
+    const hasEssentialFields = providerData.first_name &&
+      providerData.email &&
+      providerData.service_categories &&
+      providerData.account_holder_name &&
+      providerData.account_number;
 
     // Remove password if it exists
     const { password_hash, ...userWithoutPassword } = providerData;

@@ -42,7 +42,7 @@ INSERT OR REPLACE INTO services (id, subcategory_id, name, slug, description, sh
 
 -- Nanny Services
 INSERT OR REPLACE INTO services (id, subcategory_id, name, slug, description, short_description, price_range, duration, age_group, is_active, sort_order) VALUES
-('srv_nanny_fulltime', 'sub_nanny_services', 'Full-time Nanny', 'fulltime-nanny', 'Dedicated full-time nanny for complete childcare', 'Full-time childcare', '₹15,000 - ₹30,000/month', 'Full-time', '0-12 years', true, 1),
+('srv_nanny_fulltime', 'sub_nanny_services', 'Full-time nannies', 'fulltime-nanny', 'Dedicated Full-time nannies for complete childcare', 'Full-time childcare', '₹15,000 - ₹30,000/month', 'Full-time', '0-12 years', true, 1),
 ('srv_nanny_parttime', 'sub_nanny_services', 'Part-time Nanny', 'parttime-nanny', 'Part-time nanny for specific hours', 'Part-time childcare', '₹8,000 - ₹18,000/month', 'Part-time', '0-12 years', true, 2),
 ('srv_nanny_weekend', 'sub_nanny_services', 'Weekend Nanny', 'weekend-nanny', 'Weekend childcare services', 'Weekend childcare', '₹1,000 - ₹2,000/day', 'Weekends', '0-12 years', true, 3);
 

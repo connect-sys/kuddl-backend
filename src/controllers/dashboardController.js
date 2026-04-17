@@ -27,7 +27,7 @@ export async function getPartnerReviews(request, env) {
       {
         id: '1',
         customer_name: 'Sarah Johnson',
-        service_name: 'Baby Sitting',
+        service_name: 'Babysitting',
         rating: 5,
         comment: 'Excellent service! Very professional and caring with my children.',
         booking_date: '2024-11-01',
@@ -137,7 +137,7 @@ export async function getPartnerDashboardStats(request, env) {
     // Get current and previous month data for percentage calculations
     const currentDate = new Date();
     const currentMonth = currentDate.toISOString().slice(0, 7); // YYYY-MM format
-    
+
     // Calculate previous month
     const previousDate = new Date(currentDate);
     previousDate.setMonth(previousDate.getMonth() - 1);
@@ -184,7 +184,7 @@ export async function getPartnerDashboardStats(request, env) {
     let totalRatings = 0;
     let currentMonthRating = 0;
     let previousMonthRating = 0;
-    
+
     try {
       // Overall average rating
       const ratingsResult = await env.KUDDL_DB.prepare(`
@@ -192,8 +192,8 @@ export async function getPartnerDashboardStats(request, env) {
         FROM bookings 
         WHERE provider_id = ? AND status = 'completed' AND parent_rating IS NOT NULL
       `).bind(providerId).first();
-      
-      averageRating = ratingsResult?.avg_rating ? 
+
+      averageRating = ratingsResult?.avg_rating ?
         Math.round(ratingsResult.avg_rating * 10) / 10 : 0;
       totalRatings = ratingsResult?.rating_count || 0;
 
@@ -204,8 +204,8 @@ export async function getPartnerDashboardStats(request, env) {
         WHERE provider_id = ? AND status = 'completed' AND parent_rating IS NOT NULL 
         AND booking_date LIKE ?
       `).bind(providerId, `${currentMonth}%`).first();
-      
-      currentMonthRating = currentMonthRatingResult?.avg_rating ? 
+
+      currentMonthRating = currentMonthRatingResult?.avg_rating ?
         Math.round(currentMonthRatingResult.avg_rating * 10) / 10 : 0;
 
       // Previous month rating
@@ -215,8 +215,8 @@ export async function getPartnerDashboardStats(request, env) {
         WHERE provider_id = ? AND status = 'completed' AND parent_rating IS NOT NULL 
         AND booking_date LIKE ?
       `).bind(providerId, `${previousMonth}%`).first();
-      
-      previousMonthRating = previousMonthRatingResult?.avg_rating ? 
+
+      previousMonthRating = previousMonthRatingResult?.avg_rating ?
         Math.round(previousMonthRatingResult.avg_rating * 10) / 10 : 0;
 
     } catch (ratingError) {
@@ -248,7 +248,7 @@ export async function getPartnerDashboardStats(request, env) {
       } catch (e) {
         customerDetails = { name: 'Unknown', phone: 'N/A' };
       }
-      
+
       return {
         id: booking.id,
         service_name: booking.service_name,
@@ -278,11 +278,11 @@ export async function getPartnerDashboardStats(request, env) {
     const previousMonthCompleted = previousMonthCompletedResult?.total || 0;
 
     // Calculate completion rates
-    const currentCompletionRate = currentMonthBookings > 0 
-      ? Math.round((currentMonthCompleted / currentMonthBookings) * 100) 
+    const currentCompletionRate = currentMonthBookings > 0
+      ? Math.round((currentMonthCompleted / currentMonthBookings) * 100)
       : 0;
-    const previousCompletionRate = previousMonthBookings > 0 
-      ? Math.round((previousMonthCompleted / previousMonthBookings) * 100) 
+    const previousCompletionRate = previousMonthBookings > 0
+      ? Math.round((previousMonthCompleted / previousMonthBookings) * 100)
       : 0;
 
     // Calculate percentage changes
@@ -397,7 +397,7 @@ export async function getAdminDashboardStats(request, env) {
       } catch (e) {
         customerDetails = { name: 'Unknown' };
       }
-      
+
       return {
         description: `New booking for ${booking.service_name} by ${customerDetails.name || 'Unknown'}`,
         timestamp: booking.created_at,

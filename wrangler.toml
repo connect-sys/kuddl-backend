@@ -1,45 +1,115 @@
 # Cloudflare Workers Configuration for Kuddl Platform
-# Development Environment (default)
 name = "kuddl-backend-dev"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
-
-# Custom domain for development API
-[[routes]]
-pattern = "api-dev.kuddl.co/*"
-zone_name = "kuddl.co"
+account_id = "6a9b1e7bdc83a9d8ec1b28d86ac09d0b"
 
 # Development server configuration
 [dev]
 port = 8787
 
-# Environment Variables - Development
+# Default Environment Variables (Development)
 [vars]
 ENVIRONMENT = "development"
+JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
+TWILIO_ACCOUNT_SID = "AC6d0937a935e9f1247463e97b5756f845"
+TWILIO_AUTH_TOKEN = "7c73e07e5511778eea734386ee583911"
+TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
+TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
+SENDGRID_API_KEY = "your-sendgrid-api-key"
+SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
+SANDBOX_BASE_URL = "https://api.sandbox.co.in"
+SANDBOX_APPID = "key_live_4b2d1ea66a404dd49af63643a3859afc"
+SANDBOX_SECRET = "secret_live_331f8825a9ef46969d6629def6c776d1"
+SANDBOX_API_TEST_MODE = "true"
+RAZORPAY_KEY_ID = "rzp_test_S3eWfhLXqCBhRI"
+RAZORPAY_KEY_SECRET = "qhBkLRT18VWXlhRxbPatLcky"
+FRONTEND_URL = "https://partner.kuddl.co"
 
-# Database Configuration (D1) - Development
+# Default D1 Database Bindings (Development)
 [[d1_databases]]
 binding = "KUDDL_DB"
 database_name = "kuddl-dev"
 database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 
-# Production Environment
-[env.production]
-name = "kuddl-backend-prod"
+# Default R2 Storage Bindings (Development)
+[[r2_buckets]]
+binding = "KUDDL_STORAGE"
+bucket_name = "kuddl-storage-dev"
+
+# Development Environment Configuration
+[env.development]
 workers_dev = true
 
-# Custom domain for production API - api.kuddl.co
-[[env.production.routes]]
-pattern = "api.kuddl.co/*"
-zone_name = "kuddl.co"
+# Development Environment Variables
+[env.development.vars]
+ENVIRONMENT = "development"
+JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
+TWILIO_ACCOUNT_SID = "AC6d0937a935e9f1247463e97b5756f845"
+TWILIO_AUTH_TOKEN = "7c73e07e5511778eea734386ee583911"
+TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
+TWILIO_TEST_MODE = "false"
+R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
+SENDGRID_API_KEY = "your-sendgrid-api-key"
+SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
+SANDBOX_BASE_URL = "https://api.sandbox.co.in"
+SANDBOX_APPID = "key_live_4b2d1ea66a404dd49af63643a3859afc"
+SANDBOX_SECRET = "secret_live_331f8825a9ef46969d6629def6c776d1"
+SANDBOX_API_TEST_MODE = "true"
+RAZORPAY_KEY_ID = "rzp_test_S3eWfhLXqCBhRI"
+RAZORPAY_KEY_SECRET = "qhBkLRT18VWXlhRxbPatLcky"
+FRONTEND_URL = "https://dev.partner.kuddl.co"
 
+# Development D1 Database Bindings
+[[env.development.d1_databases]]
+binding = "KUDDL_DB"
+database_name = "kuddl-dev"
+database_id = "710b0b90-1803-490e-990a-97c1893edd67"
+
+# Development R2 Storage Bindings
+[[env.development.r2_buckets]]
+binding = "KUDDL_STORAGE"
+bucket_name = "kuddl-storage-dev"
+
+# Production Environment Configuration
+[env.production]
+name = "kuddl-backend-prod"
+workers_dev = false
+
+# Production Custom Domain Routes
+routes = [
+  { pattern = "api.kuddl.co/*", zone_name = "kuddl.co" }
+]
+
+# Production Environment Variables
 [env.production.vars]
 ENVIRONMENT = "production"
+JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
+TWILIO_ACCOUNT_SID = "AC6d0937a935e9f1247463e97b5756f845"
+TWILIO_AUTH_TOKEN = "7c73e07e5511778eea734386ee583911"
+TWILIO_VERIFY_SERVICE_SID = "VA31d23597fb8997f98098c4ef92889bcf"
+TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
+TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://prodassets.kuddl.co"
+SENDGRID_API_KEY = "your-sendgrid-api-key"
+SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
+SANDBOX_BASE_URL = "https://api.sandbox.co.in"
+SANDBOX_APPID = "key_live_4b2d1ea66a404dd49af63643a3859afc"
+SANDBOX_SECRET = "secret_live_331f8825a9ef46969d6629def6c776d1"
+SANDBOX_API_TEST_MODE = "false"
+RAZORPAY_KEY_ID = "rzp_test_S3eWfhLXqCBhRI"
+RAZORPAY_KEY_SECRET = "qhBkLRT18VWXlhRxbPatLcky"
+FRONTEND_URL = "https://partner.kuddl.co"
 
+# Production D1 Database Bindings
 [[env.production.d1_databases]]
 binding = "KUDDL_DB"
 database_name = "kuddl-prod"
 database_id = "27348837-2b95-4583-8c27-325bf0a1652c"
+
+# Production R2 Storage Bindings
+[[env.production.r2_buckets]]
+binding = "KUDDL_STORAGE"
+bucket_name = "kuddl-storage-prod"

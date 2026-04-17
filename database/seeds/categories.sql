@@ -5,7 +5,7 @@ INSERT OR REPLACE INTO categories (id, name, slug, description, icon, color, is_
 ('cat_adventure', 'Kuddl Adventure', 'adventure', 'Kids parties, events and celebration experiences', 'PartyPopper', '#FF6B6B', true, 1),
 ('cat_bloom', 'Kuddl Bloom', 'bloom', 'Kids learning, sports and developmental classes', 'Sparkles', '#4ECDC4', true, 2),
 ('cat_care', 'Kuddl Care', 'care', 'Care & Therapy services for children', 'Heart', '#45B7D1', true, 3),
-('cat_discover', 'Kuddl Discover', 'discover', 'Kids workshops and events near you', 'Search', '#96CEB4', true, 4);
+('cat_discover', 'Kuddl Discover', 'discover', 'Kids workshops, activities, and events near you', 'Search', '#96CEB4', true, 4);
 
 -- Subcategories Seed Data (from actual platform data)
 -- Adventure subcategories

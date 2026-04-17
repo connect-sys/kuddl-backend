@@ -1029,16 +1029,17 @@ export async function getPublicServices(request, env) {
   }
 }
 
-// Get top subcategories by available services (public)
+// Get top subcategories by booking count (public)
 export async function getTopSubcategories(request, env) {
   try {
     const url = new URL(request.url);
     const pincode = url.searchParams.get('pincode');
-    const rawLimit = parseInt(url.searchParams.get('limit') || '10', 10);
-    const limit = Number.isNaN(rawLimit) ? 10 : Math.min(Math.max(rawLimit, 1), 20);
+    const rawLimit = parseInt(url.searchParams.get('limit') || '8', 10);
+    const limit = Number.isNaN(rawLimit) ? 8 : Math.min(Math.max(rawLimit, 1), 20);
 
-    // Query subcategories with their service counts
-    // The services table links to subcategories, and subcategories have category_id
+    // Query subcategories with their booking counts
+    // Order by booking count (most popular first), then by sort_order
+    // Join bookings through services table since bookings have service_id
     let query = `
       SELECT
         sc.id AS subcategory_id,
@@ -1047,12 +1048,14 @@ export async function getTopSubcategories(request, env) {
         sc.description,
         sc.icon,
         sc.image_url,
-        COUNT(s.id) AS service_count
+        COUNT(DISTINCT s.id) AS service_count,
+        COUNT(DISTINCT b.id) AS booking_count
       FROM subcategories sc
       LEFT JOIN services s ON s.subcategory_id = sc.id AND COALESCE(s.is_active, 1) = 1
+      LEFT JOIN bookings b ON b.service_id = s.id
       WHERE COALESCE(sc.is_active, 1) = 1
       GROUP BY sc.id, sc.category_id, sc.name, sc.description, sc.icon, sc.image_url
-      ORDER BY service_count DESC, sc.sort_order ASC, sc.name ASC
+      ORDER BY booking_count DESC, service_count DESC, sc.sort_order ASC, sc.name ASC
       LIMIT ?
     `;
     const params = [limit];
@@ -1069,7 +1072,8 @@ export async function getTopSubcategories(request, env) {
         description: row.description,
         icon: row.icon,
         image_url: row.image_url,
-        service_count: row.service_count
+        service_count: row.service_count,
+        booking_count: row.booking_count
       })),
       total: rows.length
     }), {
