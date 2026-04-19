@@ -13,6 +13,9 @@ port = 8787
 # Note: Sensitive values should be set using: wrangler secret put <KEY_NAME>
 [vars]
 ENVIRONMENT = "development"
+JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
+TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
+TWILIO_TEST_MODE = "true"
 R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
@@ -67,6 +70,10 @@ routes = [
 # Production Environment Variables
 [env.production.vars]
 ENVIRONMENT = "production"
+JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
+TWILIO_VERIFY_SERVICE_SID = "VA31d23597fb8997f98098c4ef92889bcf"
+TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
+TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://prodassets.kuddl.co"
 SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"

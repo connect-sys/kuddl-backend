@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS parents (
     id TEXT PRIMARY KEY,
     phone TEXT UNIQUE NOT NULL,
     email TEXT UNIQUE,
-    name TEXT,
+    fullname TEXT,
     gender TEXT,
     date_of_birth DATE,
     profile_picture TEXT,
