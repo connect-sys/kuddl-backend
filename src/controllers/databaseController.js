@@ -608,7 +608,7 @@ export async function createParentsAndChildrenTables(request, env) {
         id TEXT PRIMARY KEY,
         phone TEXT UNIQUE NOT NULL,
         email TEXT,
-        full_name TEXT,
+        name TEXT,
         address TEXT,
         alternate_contact_name TEXT,
         alternate_contact_phone TEXT,
@@ -653,7 +653,7 @@ export async function createParentsAndChildrenTables(request, env) {
 
     await env.KUDDL_DB.prepare(`
       INSERT OR REPLACE INTO parents (
-        id, phone, email, full_name, address, alternate_contact_name, alternate_contact_phone
+        id, phone, email, name, address, alternate_contact_name, alternate_contact_phone
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `).bind(
       dummyParentId,

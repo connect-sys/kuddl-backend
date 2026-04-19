@@ -78,12 +78,12 @@ export async function createSimpleBooking(request, env) {
           
           await env.KUDDL_DB.prepare(`
             INSERT INTO parents (
-              id, phone, full_name, email, address, created_at, updated_at
+              id, phone, name, email, address, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
             parentId,
             formattedPhone,
-            parentDetails.fullName || 'Parent User',
+            parentDetails.fullName || parentDetails.name || 'Parent User',
             parentDetails.email || '',
             parentDetails.address || '',
             new Date().toISOString(),

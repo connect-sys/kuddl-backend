@@ -345,12 +345,12 @@ export async function updateParentProfile(request, env) {
         
         await env.KUDDL_DB.prepare(`
           INSERT INTO parents (
-            id, phone, full_name, email, address, created_at, updated_at
+            id, phone, name, email, address, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `).bind(
           parentId,
           normalizedPhone,
-          updateData.full_name || updateData.fullName || 'Parent User',
+          updateData.full_name || updateData.fullName || updateData.name || 'Parent User',
           updateData.email || '',
           updateData.address || '',
           new Date().toISOString(),
@@ -396,7 +396,7 @@ export async function updateParentProfile(request, env) {
 
     // Update parent profile (excluding phone to avoid UNIQUE constraint issues)
     const parentUpdates = {};
-    if (updateData.full_name || updateData.fullName) parentUpdates.full_name = updateData.full_name || updateData.fullName;
+    if (updateData.full_name || updateData.fullName || updateData.name) parentUpdates.name = updateData.full_name || updateData.fullName || updateData.name;
     if (updateData.email) parentUpdates.email = updateData.email;
     // Skip phone update to avoid UNIQUE constraint conflicts
     if (updateData.address) parentUpdates.address = updateData.address;

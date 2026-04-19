@@ -78,7 +78,7 @@ export async function generateBookingOTP(request, env) {
 
     // Get booking details
     const booking = await env.KUDDL_DB.prepare(`
-      SELECT b.*, p.full_name as parent_name, p.phone as parent_phone,
+      SELECT b.*, p.name as parent_name, p.phone as parent_phone,
              pr.business_name as partner_name, pr.phone as partner_phone
       FROM bookings b
       LEFT JOIN parents p ON b.parent_id = p.id
@@ -225,7 +225,7 @@ export async function verifyOTPAndStartService(request, env) {
 
     // Get booking details for notifications
     const booking = await env.KUDDL_DB.prepare(`
-      SELECT b.*, p.full_name as parent_name, pr.business_name as partner_name
+      SELECT b.*, p.name as parent_name, pr.business_name as partner_name
       FROM bookings b
       LEFT JOIN parents p ON b.parent_id = p.id
       LEFT JOIN providers pr ON b.provider_id = pr.id

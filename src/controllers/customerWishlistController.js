@@ -28,7 +28,7 @@ export async function getWishlist(request, env) {
         w.id as wishlist_id,
         w.created_at as added_at,
         s.*,
-        p.full_name as provider_name,
+        p.name as provider_name,
         p.email as provider_email
       FROM customer_wishlist w
       JOIN services s ON w.service_id = s.id
