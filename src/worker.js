@@ -53,6 +53,7 @@ import * as profileProgressController from './controllers/profileProgressControl
 import * as profileProgressDatabaseController from './controllers/profileProgressDatabaseController.js';
 import * as publicStatsController from './controllers/publicStatsController.js';
 import * as contentManagementController from './controllers/contentManagementController.js';
+import * as contactController from './controllers/contactController.js';
 import bcrypt from 'bcryptjs';
 
 // Initialize router
@@ -91,6 +92,17 @@ router.get('/api/child-subcategories', (request, env) => categoriesController.ge
 
 // Public stats route (no authentication required)
 router.get('/api/public/stats', (request, env) => publicStatsController.getPublicStats(request, env));
+
+// Contact form routes
+router.post('/api/contact/submit', (request, env) => contactController.submitContactForm(request, env));
+router.get('/api/contact/submissions', async (request, env) => {
+  const authedUser = await authController.verifyToken(request, env);
+  return contactController.getContactSubmissions(request, env, authedUser);
+});
+router.patch('/api/contact/submissions/:id/status', async (request, env) => {
+  const authedUser = await authController.verifyToken(request, env);
+  return contactController.updateContactSubmissionStatus(request, env, authedUser);
+});
 
 // Content Management System routes
 router.post('/api/cms/setup-tables', (request, env) => contentManagementController.createContentTables(request, env));
@@ -6880,11 +6892,12 @@ export default {
         });
       }
       
-      // Ensure CORS headers on every response
-      response.headers.set('Access-Control-Allow-Origin', '*');
-      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Access-Control-Allow-Headers, X-API-Key, X-Client-Version');
-      return response;
+      // Ensure CORS headers on every response by creating a new response
+      const newResponse = new Response(response.body, response);
+      newResponse.headers.set('Access-Control-Allow-Origin', '*');
+      newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Access-Control-Allow-Headers, X-API-Key, X-Client-Version');
+      return newResponse;
     } catch (error) {
       console.error('❌ Unhandled worker error:', error.message, error.stack);
       return new Response(JSON.stringify({
