@@ -2997,6 +2997,10 @@ router.post('/api/migrate/add-selected-date-column', async (request, env) => {
   return migrationController.addSelectedDateColumn(request, env);
 });
 
+router.post('/api/migrate/fix-provider-email-empty-strings', async (request, env) => {
+  return migrationController.fixProviderEmailEmptyStrings(request, env);
+});
+
 router.post('/api/migrate/create-parents-tables', async (request, env) => {
   return migrationController.createParentsTables(request, env);
 });

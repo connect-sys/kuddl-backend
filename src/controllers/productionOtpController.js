@@ -648,7 +648,7 @@ export async function verifyPartnerProductionOTP(request, env) {
         `).bind(
           providerId,
           formattedPhone,
-          '',
+          null,
           'Partner',
           1,
           now,
@@ -658,7 +658,7 @@ export async function verifyPartnerProductionOTP(request, env) {
         providerData = {
           id: providerId,
           phone: formattedPhone,
-          email: '',
+          email: null,
           name: 'Partner'
         };
         console.log('✅ Created new provider record with ID:', providerId);
