@@ -187,7 +187,7 @@ export async function createBooking(request, env) {
         if (existingParent) {
           // Update existing parent
           const parentUpdates = {};
-          if (parentDetails.fullName) parentUpdates.full_name = parentDetails.fullName;
+          if (parentDetails.fullName || parentDetails.name) parentUpdates.full_name = parentDetails.fullName || parentDetails.name;
           if (parentDetails.email) parentUpdates.email = parentDetails.email;
           if (parentDetails.phone) parentUpdates.phone = parentDetails.phone;
           if (parentDetails.address) parentUpdates.address = parentDetails.address;

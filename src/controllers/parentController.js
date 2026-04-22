@@ -345,7 +345,7 @@ export async function updateParentProfile(request, env) {
         
         await env.KUDDL_DB.prepare(`
           INSERT INTO parents (
-            id, phone, name, email, address, created_at, updated_at
+            id, phone, full_name, email, address, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `).bind(
           parentId,
@@ -396,15 +396,17 @@ export async function updateParentProfile(request, env) {
 
     // Update parent profile (excluding phone to avoid UNIQUE constraint issues)
     const parentUpdates = {};
-    if (updateData.full_name || updateData.fullName || updateData.name) parentUpdates.name = updateData.full_name || updateData.fullName || updateData.name;
+    if (updateData.full_name || updateData.fullName || updateData.name) parentUpdates.full_name = updateData.full_name || updateData.fullName || updateData.name;
     if (updateData.email) parentUpdates.email = updateData.email;
+    if (updateData.gender) parentUpdates.gender = updateData.gender;
+    if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
+    if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
     // Skip phone update to avoid UNIQUE constraint conflicts
     if (updateData.address) parentUpdates.address = updateData.address;
     if (updateData.city) parentUpdates.city = updateData.city;
     if (updateData.state) parentUpdates.state = updateData.state;
     if (updateData.pincode) parentUpdates.pincode = updateData.pincode;
     if (updateData.country) parentUpdates.country = updateData.country;
-    if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
     if (updateData.alternate_contact_name || updateData.alternateContactName) parentUpdates.alternate_contact_name = updateData.alternate_contact_name || updateData.alternateContactName;
     if (updateData.alternate_contact_phone || updateData.alternateContactPhone) parentUpdates.alternate_contact_phone = updateData.alternate_contact_phone || updateData.alternateContactPhone;
 
@@ -450,9 +452,22 @@ export async function updateParentProfile(request, env) {
 // Add child
 export async function addChild(request, env) {
   try {
+    console.log('🚀 Starting addChild function...');
+    
+    // Check children table structure
+    try {
+      const tableInfo = await env.KUDDL_DB.prepare(`PRAGMA table_info(children)`).all();
+      console.log('📋 Children table structure:', JSON.stringify(tableInfo, null, 2));
+      const columns = (tableInfo.results || tableInfo).map(col => col.name);
+      console.log('📋 Column names:', columns.join(', '));
+    } catch (tableError) {
+      console.error('❌ Error checking table structure:', tableError);
+    }
+    
     // Get authenticated parent from token
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ No authorization header');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Authorization token required'
@@ -466,6 +481,7 @@ export async function addChild(request, env) {
     const isValid = await jwt.verify(token, env.JWT_SECRET);
     
     if (!isValid) {
+      console.log('❌ Invalid token');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Invalid token'
@@ -477,10 +493,14 @@ export async function addChild(request, env) {
 
     const decoded = jwt.decode(token);
     const parentId = decoded.payload.id;
+    console.log('👤 Parent ID:', parentId);
+    
     const childData = await request.json();
+    console.log('📝 Received child data:', JSON.stringify(childData, null, 2));
 
     // Validate required fields (age is derived from DOB if not provided)
-    if (!childData.name) {
+    const childName = childData.name || childData.full_name;
+    if (!childName) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Child name is required'
@@ -490,44 +510,85 @@ export async function addChild(request, env) {
       }));
     }
 
+    // Keep DOB in DD-MM-YYYY format as received
+    let dobForDB = childData.dateOfBirth || childData.date_of_birth;
+
     // Calculate age from dateOfBirth if age not explicitly provided
+    // Age should be INTEGER (years only)
     let ageValue = childData.age || null;
-    if (!ageValue && childData.dateOfBirth) {
-      const dob = new Date(childData.dateOfBirth);
+    if (!ageValue && dobForDB) {
+      // Parse DD-MM-YYYY format
+      let dob;
+      if (dobForDB.includes('-')) {
+        const parts = dobForDB.split('-');
+        if (parts.length === 3 && parts[0].length === 2) {
+          // DD-MM-YYYY format
+          dob = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+        } else {
+          dob = new Date(dobForDB);
+        }
+      } else {
+        dob = new Date(dobForDB);
+      }
+      
       if (!isNaN(dob.getTime())) {
         const now = new Date();
         let years = now.getFullYear() - dob.getFullYear();
         const mDiff = now.getMonth() - dob.getMonth();
         if (mDiff < 0 || (mDiff === 0 && now.getDate() < dob.getDate())) years--;
-        const months = ((now.getFullYear() - dob.getFullYear()) * 12 + now.getMonth() - dob.getMonth());
-        ageValue = years < 1 ? `${Math.max(months, 0)} months` : `${years} years`;
+        ageValue = Math.max(years, 0); // INTEGER only
       }
     }
 
     const childId = generateId();
     
-    await env.KUDDL_DB.prepare(`
-      INSERT INTO children (
-        id, parent_id, name, age, gender, 
-        medical_conditions, bedtime, dietary_restrictions,
-        special_needs, allergies, date_of_birth,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
+    console.log('💾 Inserting child:', { 
       childId, 
       parentId, 
-      childData.name, 
-      ageValue,
-      childData.gender || null,
-      childData.medicalConditions || null,
-      childData.bedtime || null,
-      childData.dietaryRestrictions || null,
-      childData.specialNeeds || null,
-      childData.allergies || null,
-      childData.dateOfBirth || null,
-      new Date().toISOString(), 
-      new Date().toISOString()
-    ).run();
+      childName, 
+      ageValue, 
+      dobForDB,
+      gender: childData.gender,
+      medicalConditions: childData.medicalConditions,
+      bedtime: childData.bedtime,
+      dietaryRestrictions: childData.dietaryRestrictions,
+      specialNeeds: childData.specialNeeds,
+      allergies: childData.allergies,
+      profile_picture: childData.profile_picture
+    });
+    
+    try {
+      await env.KUDDL_DB.prepare(`
+        INSERT INTO children (
+          id, parent_id, name, date_of_birth, gender, 
+          medical_conditions, allergies, dietary_restrictions,
+          special_needs, bedtime, profile_picture,
+          is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        childId, 
+        parentId, 
+        childName, 
+        dobForDB || null,
+        childData.gender || null,
+        childData.medicalConditions || null,
+        childData.allergies || null,
+        childData.dietaryRestrictions || null,
+        childData.specialNeeds || null,
+        childData.bedtime || null,
+        childData.profile_picture || null,
+        1, // is_active
+        new Date().toISOString(), 
+        new Date().toISOString()
+      ).run();
+      
+      console.log('✅ Child inserted successfully');
+    } catch (dbError) {
+      console.error('❌ Database insert error:', dbError);
+      console.error('❌ Error message:', dbError.message);
+      console.error('❌ Error stack:', dbError.stack);
+      throw dbError;
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -538,10 +599,14 @@ export async function addChild(request, env) {
     }));
 
   } catch (error) {
-    console.error('Add child error:', error);
+    console.error('❌ Add child error:', error);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error stack:', error.stack);
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
-      message: 'Failed to add child'
+      message: 'Failed to add child',
+      error: error.message,
+      stack: error.stack
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }

@@ -49,6 +49,8 @@ import * as customerProfileController from './controllers/customerProfileControl
 import * as customerWishlistController from './controllers/customerWishlistController.js';
 import * as customerWalletController from './controllers/customerWalletController.js';
 import * as customerContactsController from './controllers/customerContactsController.js';
+import * as createBookingOtpsTableController from './controllers/createBookingOtpsTableController.js';
+import * as fixParentsTableController from './controllers/fixParentsTableController.js';
 import * as profileProgressController from './controllers/profileProgressController.js';
 import * as profileProgressDatabaseController from './controllers/profileProgressDatabaseController.js';
 import * as publicStatsController from './controllers/publicStatsController.js';
@@ -172,6 +174,8 @@ router.get('/api/database/schema', (request, env) => databaseCleanupController.g
 router.get('/api/database/debug-bookings', (request, env) => databaseCleanupController.debugBookingsData(request, env));
 router.post('/api/database/fix-orphaned-bookings', (request, env) => databaseCleanupController.fixOrphanedBookings(request, env));
 router.post('/api/database/add-service-columns', (request, env) => databaseCleanupController.addServiceTrackingColumns(request, env));
+router.post('/api/database/create-booking-otps-table', (request, env) => createBookingOtpsTableController.createBookingOtpsTable(request, env));
+router.post('/api/database/fix-parents-table', (request, env) => fixParentsTableController.fixParentsTable(request, env));
 
 // Removed duplicate route - main partner profile route is handled below
 
