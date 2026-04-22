@@ -903,3 +903,37 @@ export async function createAvailabilityTables(request, env) {
     }));
   }
 }
+
+export async function fixProviderEmailEmptyStrings(request, env) {
+  try {
+    console.log('🔧 Running migration: Fix empty email strings in providers table');
+    
+    // Update all empty string emails to NULL
+    const result = await env.KUDDL_DB.prepare(`
+      UPDATE providers 
+      SET email = NULL 
+      WHERE email = ''
+    `).run();
+    
+    console.log(`✅ Successfully updated ${result.meta.changes} provider records`);
+    
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: `Successfully updated ${result.meta.changes} provider records with empty emails to NULL`,
+      recordsUpdated: result.meta.changes
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    }));
+    
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Migration failed',
+      error: error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+}
