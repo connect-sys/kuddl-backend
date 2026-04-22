@@ -32,10 +32,15 @@ export const getCategories = async (request, env) => {
         .filter(sub => sub.category_id === category.id)
         .map(subcategory => ({
           id: subcategory.id,
+          category_id: subcategory.category_id,
           name: subcategory.name,
           description: subcategory.description,
-          icon: subcategory.icon
+          icon: subcategory.icon,
+          slug: subcategory.slug,
+          image_url: subcategory.image_url
         }));
+
+      console.log(`📂 Category ${category.id} (${category.name}) has ${categorySubcategories.length} subcategories`);
 
       return {
         id: category.id,
