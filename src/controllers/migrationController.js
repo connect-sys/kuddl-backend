@@ -562,7 +562,7 @@ export async function createParentsTables(request, env) {
         id TEXT PRIMARY KEY,
         phone TEXT UNIQUE NOT NULL,
         email TEXT,
-        name TEXT NOT NULL,
+        full_name TEXT NOT NULL,
         address TEXT,
         city TEXT,
         state TEXT,
