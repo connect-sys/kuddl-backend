@@ -313,15 +313,17 @@ export async function createBooking(request, env) {
       initialPaymentId
     });
 
+    const durationHours = durationMinutes / 60;
+    
     await env.KUDDL_DB.prepare(`
       INSERT INTO bookings (
         id, service_id, parent_id, provider_id, booking_date, selected_date, start_time, end_time,
-        duration_minutes, special_requests, status, total_amount, platform_fee, provider_amount,
+        duration_hours, duration_minutes, special_requests, status, total_amount, platform_fee, provider_amount,
         payment_status, payment_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       bookingId, serviceId, parentId, providerId, selectedDate, selectedDate, startTime, endTime,
-      durationMinutes, JSON.stringify(bookingDetails), initialStatus, baseAmount, platformFee, providerAmount,
+      durationHours, durationMinutes, JSON.stringify(bookingDetails), initialStatus, baseAmount, platformFee, providerAmount,
       initialPaymentStatus, initialPaymentId, new Date().toISOString(), new Date().toISOString()
     ).run();
 

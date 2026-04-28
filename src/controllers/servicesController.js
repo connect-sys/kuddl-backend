@@ -886,19 +886,15 @@ export async function getPublicServices(request, env) {
           s.created_at,
           s.status,
           s.provider_id,
-          p.id as provider_db_id,
+          p.name as provider_name,
           p.business_name,
-          p.first_name,
-          p.last_name,
-          p.profile_image_url,
+          p.profile_picture as profile_image_url,
           p.city,
           p.state,
-          p.experience_years,
-          p.is_active,
-          p.serviceable_pincodes
+          p.experience_years
         FROM services s
-        LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
+        LEFT JOIN providers p ON s.provider_id = p.id
         WHERE 1=1
       `;
       
@@ -906,12 +902,8 @@ export async function getPublicServices(request, env) {
 
       if (pincode) {
         // Only return services that are actually available in the requested pincode
-        // Check service-level available_pincodes first, then provider serviceable_pincodes as fallback
-        query += ` AND (
-          (s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?) OR
-          (s.available_pincodes IS NULL AND p.serviceable_pincodes IS NOT NULL AND p.serviceable_pincodes LIKE ?)
-        )`;
-        params.push(`%${pincode}%`, `%${pincode}%`);
+        query += ` AND s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?`;
+        params.push(`%${pincode}%`);
       }
 
       if (category) {
@@ -927,8 +919,20 @@ export async function getPublicServices(request, env) {
       query += ` ORDER BY s.created_at DESC LIMIT ?`;
       params.push(limit);
 
-      const servicesStmt = env.KUDDL_DB.prepare(query);
-      const services = await servicesStmt.bind(...params).all();
+      console.log('🔍 Final Query:', query);
+      console.log('📋 Params:', params);
+
+      let services;
+      try {
+        const servicesStmt = env.KUDDL_DB.prepare(query);
+        services = await servicesStmt.bind(...params).all();
+        console.log('📦 Services found:', services.results?.length || 0);
+      } catch (queryError) {
+        console.error('❌ SQL Query Error:', queryError);
+        console.error('Query was:', query);
+        console.error('Params were:', params);
+        throw queryError;
+      }
 
       // If no services found with pincode filter, return specific response
       if (pincode && (!services.results || services.results.length === 0)) {
@@ -951,6 +955,11 @@ export async function getPublicServices(request, env) {
       
       const transformedServices = (services.results || []).map(service => {
         const parsedImageUrls = imageUrlsArray(service);
+        
+        // Debug provider data
+        console.log(`🔍 Service: ${service.name}, Provider ID: ${service.provider_id}`);
+        console.log(`   Provider Data: provider_name=${service.provider_name}, business_name=${service.business_name}`);
+        
         return {
           id: service.id,
           provider_id: service.provider_id, // Add top-level provider_id for compatibility
@@ -975,17 +984,17 @@ export async function getPublicServices(request, env) {
           primaryImage: service.primary_image_url || null,
           primary_image_url: service.primary_image_url || null,
           // Provider info
-          business_name: service.business_name || 'Service Provider',
-          first_name: service.first_name || 'Service',
-          last_name: service.last_name || 'Provider',
+          provider_name: service.provider_name,
+          business_name: service.business_name,
           average_rating: 4.5, // Default rating since column doesn't exist
           profile_image_url: service.profile_image_url,
+          city: service.city,
+          state: service.state,
+          experience_years: service.experience_years,
           provider: {
             id: service.provider_id,
-            businessName: service.business_name || 'Service Provider',
-            name: service.first_name && service.last_name ? `${service.first_name} ${service.last_name}` : 'Service Provider',
-            first_name: service.first_name || 'Service',
-            last_name: service.last_name || 'Provider',
+            name: service.provider_name,
+            businessName: service.business_name,
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',

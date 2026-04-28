@@ -396,7 +396,7 @@ export async function updateParentProfile(request, env) {
 
     // Update parent profile (excluding phone to avoid UNIQUE constraint issues)
     const parentUpdates = {};
-    if (updateData.full_name || updateData.fullName || updateData.name) parentUpdates.full_name = updateData.full_name || updateData.fullName || updateData.name;
+    if (updateData.fullname || updateData.fullName || updateData.name) parentUpdates.fullname = updateData.fullname || updateData.fullName || updateData.name;
     if (updateData.email) parentUpdates.email = updateData.email;
     if (updateData.gender) parentUpdates.gender = updateData.gender;
     if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
@@ -715,8 +715,7 @@ export async function getParentBookings(request, env) {
         b.*,
         s.name as service_name,
         pr.business_name,
-        pr.first_name as provider_first_name,
-        pr.last_name as provider_last_name,
+        pr.name as provider_name,
         bo.otp_code,
         bo.status as otp_status,
         bo.expires_at as otp_expires_at
@@ -750,7 +749,7 @@ export async function getParentBookings(request, env) {
         serviceName: booking.service_name || 'Unknown Service',
         serviceCategory: 'General', // Default category since column doesn't exist
         providerId: booking.provider_id,
-        providerName: booking.business_name || `${booking.provider_first_name || ''} ${booking.provider_last_name || ''}`.trim() || 'Unknown Provider',
+        providerName: booking.business_name || booking.provider_name || 'Unknown Provider',
         bookingDate: booking.booking_date,
         startTime: booking.start_time,
         endTime: booking.end_time,
@@ -884,7 +883,7 @@ export async function getParentDashboard(request, env) {
       
       const bResult = await env.KUDDL_DB.prepare(`
         SELECT b.*, s.name as service_name, pr.business_name,
-               pr.first_name as provider_first_name, pr.last_name as provider_last_name
+               pr.name as provider_name
         FROM bookings b
         LEFT JOIN services s ON b.service_id = s.id
         LEFT JOIN providers pr ON b.provider_id = pr.id
