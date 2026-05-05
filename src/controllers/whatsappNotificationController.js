@@ -99,7 +99,7 @@ export async function sendMultiChannelNotification(request, env) {
       `).bind(recipientId).first();
     } else {
       recipientData = await env.KUDDL_DB.prepare(`
-        SELECT phone, email, name FROM parents WHERE id = ?
+        SELECT phone, email, full_name as name FROM parents WHERE id = ?
       `).bind(recipientId).first();
     }
 

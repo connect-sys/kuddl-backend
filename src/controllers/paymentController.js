@@ -95,13 +95,12 @@ export async function createPaymentOrder(request, env) {
     const paymentOrderId = generateId();
     await env.KUDDL_DB.prepare(`
       INSERT INTO payment_orders (
-        id, amount, currency, status, payment_id, booking_id, created_at, razorpay_order_id
-      ) VALUES (?, ?, ?, 'created', ?, ?, ?, ?)
+        id, amount, currency, status, booking_id, created_at, razorpay_order_id
+      ) VALUES (?, ?, ?, 'created', ?, ?, ?)
     `).bind(
       paymentOrderId,
       amount,
       currency,
-      null, // payment_id is initially null
       bookingId || null,
       new Date().toISOString(),
       orderId
@@ -309,13 +308,12 @@ export async function processPayment(request, env) {
     const paymentOrderId = generateId();
     await env.KUDDL_DB.prepare(`
       INSERT INTO payment_orders (
-        id, amount, currency, status, payment_id, signature, created_at, updated_at
-      ) VALUES (?, ?, 'INR', 'completed', ?, ?, ?, ?)
+        id, amount, currency, status, razorpay_payment_id, created_at, updated_at
+      ) VALUES (?, ?, 'INR', 'completed', ?, ?, ?)
     `).bind(
       paymentOrderId,
       amount,
       paymentId,
-      'demo_signature',
       new Date().toISOString(),
       new Date().toISOString()
     ).run();

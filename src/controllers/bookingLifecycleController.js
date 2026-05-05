@@ -387,7 +387,7 @@ export async function getBookingLifecycle(request, env) {
 
     const lifecycle = await env.KUDDL_DB.prepare(`
       SELECT bl.*, b.booking_date, b.start_time, b.end_time, b.total_amount,
-             p.business_name as partner_name, par.name as parent_name
+             p.business_name as partner_name, par.full_name as parent_name
       FROM booking_lifecycle bl
       JOIN bookings b ON bl.booking_id = b.id
       LEFT JOIN providers p ON b.provider_id = p.id

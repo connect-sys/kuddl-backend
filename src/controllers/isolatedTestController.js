@@ -61,7 +61,7 @@ export async function testParentChildrenCreation(request, env) {
           
           await env.KUDDL_DB.prepare(`
             INSERT INTO parents (
-              id, phone, name, email, address, created_at, updated_at
+              id, phone, full_name, email, address, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
             parentId,

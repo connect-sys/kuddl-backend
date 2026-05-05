@@ -2910,8 +2910,7 @@ export async function getAdminBookings(request, env) {
         pa.full_name as parent_name,
         pa.email as parent_email,
         pa.phone as parent_phone,
-        pr.first_name as partner_first_name,
-        pr.last_name as partner_last_name,
+        pr.name as partner_name,
         pr.business_name,
         s.name as service_name,
         s.category as service_category
@@ -2927,7 +2926,7 @@ export async function getAdminBookings(request, env) {
       parentId: booking.parent_id,
       customerName: booking.parent_name || booking.parent_email || 'Unknown Parent',
       partnerId: booking.provider_id,
-      partnerName: booking.business_name || `${booking.partner_first_name || ''} ${booking.partner_last_name || ''}`.trim() || 'Unknown Partner',
+      partnerName: booking.business_name || booking.partner_name || 'Unknown Partner',
       serviceName: booking.service_name || 'Unknown Service',
       serviceType: booking.service_category || 'General',
       bookingDate: booking.booking_date,

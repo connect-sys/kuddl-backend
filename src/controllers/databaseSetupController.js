@@ -35,7 +35,7 @@ export async function setupParentsTables(request, env) {
       CREATE TABLE IF NOT EXISTS children (
         id TEXT PRIMARY KEY,
         parent_id TEXT NOT NULL,
-        name TEXT NOT NULL,
+        full_name TEXT NOT NULL,
         date_of_birth TEXT,
         age INTEGER,
         gender TEXT,
