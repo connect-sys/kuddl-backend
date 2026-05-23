@@ -340,9 +340,9 @@ export async function getAdminDashboardStats(request, env) {
       SELECT COUNT(*) as total FROM providers WHERE is_active = 1
     `).first();
 
-    // Get total customers (users with role customer)
+    // Get total customers (from parents table)
     const totalCustomersResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM users WHERE role = 'customer'
+      SELECT COUNT(*) as total FROM parents
     `).first();
 
     // Get total bookings
@@ -460,7 +460,7 @@ export async function getPartnerCalendarBookings(request, env) {
       SELECT 
         b.*,
         s.name as service_name,
-        p.full_name as parent_name,
+        COALESCE(p.full_name, p.name, '') as parent_name,
         p.phone as parent_phone
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id

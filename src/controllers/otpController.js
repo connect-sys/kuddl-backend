@@ -38,7 +38,7 @@ export async function sendOTP(request, env) {
       try {
         // Check parents table for customer signups
         const existingParent = await env.KUDDL_DB.prepare(
-          'SELECT id, full_name FROM parents WHERE phone = ?'
+          'SELECT id, fullname FROM parents WHERE phone = ?'
         ).bind(formattedPhone).first();
 
         if (existingParent) {

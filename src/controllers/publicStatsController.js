@@ -34,11 +34,28 @@ export async function getPublicStats(request, env) {
       FROM bookings
     `).first();
 
+    // Get camp bookings
+    const campBookingsResult = await env.KUDDL_DB.prepare(`
+      SELECT COUNT(*) as count FROM camp_bookings
+    `).first().catch(() => ({ count: 0 }));
+
+    // Get active services
+    const activeServicesResult = await env.KUDDL_DB.prepare(`
+      SELECT COUNT(*) as count FROM services WHERE status = 'active'
+    `).first().catch(() => ({ count: 0 }));
+
+    // Get active camps
+    const activeCampsResult = await env.KUDDL_DB.prepare(`
+      SELECT COUNT(*) as count FROM camps WHERE status = 'active'
+    `).first().catch(() => ({ count: 0 }));
+
     const activeProviders = activeProvidersResult?.count || 0;
     const bookingsCompleted = bookingsCompletedResult?.count || 0;
     const averageRating = averageRatingResult?.avg_rating || 0;
     const totalReviews = averageRatingResult?.total_reviews || 0;
-    const totalBookings = totalBookingsResult?.count || 0;
+    const totalBookings = (totalBookingsResult?.count || 0) + (campBookingsResult?.count || 0);
+    const totalServices = activeServicesResult?.count || 0;
+    const activeCamps = activeCampsResult?.count || 0;
 
     // Format numbers for display
     const formatNumber = (num) => {
@@ -71,6 +88,16 @@ export async function getPublicStats(request, env) {
         value: totalBookings,
         display: formatNumber(totalBookings),
         label: 'Total Bookings'
+      },
+      totalServices: {
+        value: totalServices,
+        display: formatNumber(totalServices),
+        label: 'Active Services'
+      },
+      activeCamps: {
+        value: activeCamps,
+        display: formatNumber(activeCamps),
+        label: 'Active Camps'
       }
     };
 

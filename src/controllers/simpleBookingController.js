@@ -129,12 +129,21 @@ export async function createSimpleBooking(request, env) {
             const childId = generateId();
             console.log(`🆕 Creating new child with ID: ${childId}`);
             
+            // Calculate DOB from age if not provided
+            let dobForDB = child.dateOfBirth || child.date_of_birth;
+            if (!dobForDB && child.age) {
+              const now = new Date();
+              const birthYear = now.getFullYear() - parseInt(child.age);
+              dobForDB = `01-01-${birthYear}`;
+              console.log(`📅 Calculated DOB from age ${child.age}: ${dobForDB}`);
+            }
+            
             await env.KUDDL_DB.prepare(`
               INSERT INTO children (
                 id, parent_id, name, age, gender, 
                 medical_conditions, bedtime, dietary_restrictions,
-                special_needs, allergies, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                special_needs, allergies, date_of_birth, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
               childId, 
               parentId, 
@@ -146,6 +155,7 @@ export async function createSimpleBooking(request, env) {
               child.dietaryRestrictions || null,
               child.specialNeeds || null,
               child.allergies || null,
+              dobForDB || `01-01-${new Date().getFullYear() - (child.age || 0)}`,
               new Date().toISOString(), 
               new Date().toISOString()
             ).run();

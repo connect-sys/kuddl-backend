@@ -7,7 +7,7 @@ export const getCategories = async (request, env) => {
     console.log('🔍 Getting categories...');
     
     // Get all categories with service count
-    const categories = await env.KUDDL_DB.prepare(`
+    const categoriesResult = await env.KUDDL_DB.prepare(`
       SELECT c.*, COUNT(s.id) as service_count 
       FROM categories c
       LEFT JOIN subcategories sub ON c.id = sub.category_id
@@ -16,19 +16,21 @@ export const getCategories = async (request, env) => {
       ORDER BY c.name ASC
     `).all();
 
-    console.log('📊 Categories result:', categories);
+    console.log('📊 Categories result:', categoriesResult);
+    const categories = categoriesResult.results || [];
 
     // Get all subcategories
-    const subcategories = await env.KUDDL_DB.prepare(`
+    const subcategoriesResult = await env.KUDDL_DB.prepare(`
       SELECT * FROM subcategories 
       ORDER BY category_id, name ASC
     `).all();
 
-    console.log('📋 Subcategories result:', subcategories);
+    console.log('📋 Subcategories result:', subcategoriesResult);
+    const subcategories = subcategoriesResult.results || [];
 
     // Group subcategories by category
-    const categoriesWithHierarchy = (categories.results || categories).map(category => {
-      const categorySubcategories = (subcategories.results || subcategories)
+    const categoriesWithHierarchy = categories.map(category => {
+      const categorySubcategories = subcategories
         .filter(sub => sub.category_id === category.id)
         .map(subcategory => ({
           id: subcategory.id,

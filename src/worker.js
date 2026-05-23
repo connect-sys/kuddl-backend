@@ -8,6 +8,8 @@ import jwt from '@tsndr/cloudflare-worker-jwt';
 import { addCorsHeaders, handleCorsOptions, createApiResponse } from './utils/cors.js';
 import * as authController from './controllers/authController.js';
 import * as adminController from './controllers/adminController.js';
+import * as adminPartnerManagementController from './controllers/adminPartnerManagementController.js';
+import * as addProviderCoordinatesController from './controllers/addProviderCoordinatesController.js';
 import * as otpController from './controllers/otpController.js';
 import * as otpServiceController from './controllers/otpServiceController.js';
 import * as otpDatabaseController from './controllers/otpDatabaseController.js';
@@ -34,6 +36,7 @@ import * as parentController from './controllers/parentController.js';
 import * as databaseSetupController from './controllers/databaseSetupController.js';
 import { GoogleAuthController } from './controllers/googleAuthController.js';
 import * as categoriesController from './controllers/categoriesController.js';
+import * as serviceTypeController from './controllers/serviceTypeController.js';
 import * as availabilityController from './controllers/availabilityController.js';
 import * as fixedAvailabilityController from "./controllers/fixedAvailabilityController.js";
 import * as partnerAvailabilityController from './controllers/partnerAvailabilityController.js';
@@ -55,7 +58,14 @@ import * as profileProgressController from './controllers/profileProgressControl
 import * as profileProgressDatabaseController from './controllers/profileProgressDatabaseController.js';
 import * as publicStatsController from './controllers/publicStatsController.js';
 import * as contentManagementController from './controllers/contentManagementController.js';
+import * as serviceWorkerController from './controllers/serviceWorkerController.js';
+import * as subscriptionController from './controllers/subscriptionController.js';
+import * as campsController from './controllers/campsController.js';
+import * as batchesController from './controllers/batchesController.js';
+import * as partnerApplicationsController from './controllers/partnerApplicationsController.js';
+import * as mpinController from './controllers/mpinController.js';
 import * as contactController from './controllers/contactController.js';
+import * as serviceWizardController from './controllers/serviceWizardController.js';
 import bcrypt from 'bcryptjs';
 
 // Initialize router
@@ -92,6 +102,12 @@ router.get('/api/categories/module', (request, env) => categoriesController.getC
 router.get('/api/subcategories', (request, env) => categoriesController.getSubcategories(request, env));
 router.get('/api/child-subcategories', (request, env) => categoriesController.getChildSubcategories(request, env));
 
+// Service Type Registry routes (Deliverable 1 — smart category picker + config for Add Service form)
+router.get('/api/service-types/search', (request, env) => serviceTypeController.searchServiceTypes(request, env));
+router.get('/api/service-types', (request, env) => serviceTypeController.listServiceTypes(request, env));
+router.get('/api/service-types/:id/config', (request, env) => serviceTypeController.getServiceTypeConfig(request, env));
+router.post('/api/service-types/setup', (request, env) => serviceTypeController.setupServiceTypeRegistry(request, env));
+
 // Public stats route (no authentication required)
 router.get('/api/public/stats', (request, env) => publicStatsController.getPublicStats(request, env));
 
@@ -125,6 +141,58 @@ router.get('/api/jobs', (request, env) => contentManagementController.getJobPost
 router.post('/api/admin/job', (request, env) => contentManagementController.createJobPosting(request, env));
 router.put('/api/admin/job', (request, env) => contentManagementController.updateJobPosting(request, env));
 router.delete('/api/admin/job', (request, env) => contentManagementController.deleteJobPosting(request, env));
+
+// Job application routes (public)
+router.post('/api/job-applications', (request, env) => contentManagementController.createJobApplication(request, env));
+
+// Job application routes (admin only)
+router.get('/api/admin/job-applications', (request, env) => contentManagementController.getJobApplications(request, env));
+router.put('/api/admin/job-applications/status', (request, env) => contentManagementController.updateJobApplicationStatus(request, env));
+
+// Service Worker routes (partner only)
+router.post('/api/service-workers', (request, env) => serviceWorkerController.createServiceWorker(request, env));
+router.get('/api/service-workers', (request, env) => serviceWorkerController.getServiceWorkers(request, env));
+router.put('/api/service-workers', (request, env) => serviceWorkerController.updateServiceWorker(request, env));
+router.delete('/api/service-workers', (request, env) => serviceWorkerController.deleteServiceWorker(request, env));
+
+// Service Worker auth routes (public)
+router.post('/api/service-workers/login', (request, env) => serviceWorkerController.serviceWorkerLogin(request, env));
+router.get('/api/service-workers/check', (request, env) => serviceWorkerController.checkIsServiceWorker(request, env));
+router.get('/api/service-workers/permissions', (request, env) => serviceWorkerController.getWorkerPermissions(request, env));
+
+// Subscription routes
+router.post('/api/admin/init-service-workers-tables', (request, env) => subscriptionController.initializeServiceWorkersTables(request, env));
+router.get('/api/subscription-plans', (request, env) => subscriptionController.getSubscriptionPlans(request, env));
+router.get('/api/partner/subscription', (request, env) => subscriptionController.getProviderSubscription(request, env));
+router.post('/api/partner/subscription/upgrade', (request, env) => subscriptionController.upgradeSubscription(request, env));
+
+// Service Worker dashboard
+router.get('/api/service-workers/dashboard', (request, env) => campsController.getWorkerDashboard(request, env));
+
+// Camps routes - init
+router.post('/api/admin/init-camps-tables', (request, env) => campsController.initializeCampsTables(request, env));
+
+// Camps routes - partner
+router.post('/api/camps', (request, env) => campsController.createCamp(request, env));
+router.get('/api/partner/camps', (request, env) => campsController.getPartnerCamps(request, env));
+router.put('/api/camps', (request, env) => campsController.updateCamp(request, env));
+router.get('/api/partner/camp-bookings', (request, env) => campsController.getCampBookings(request, env));
+
+// Camps routes - public/customer
+router.get('/api/camps', (request, env) => campsController.getPublicCamps(request, env));
+router.post('/api/camps/book', (request, env) => campsController.bookCamp(request, env));
+router.get('/api/my-camp-bookings', (request, env) => campsController.getMyBookings(request, env));
+
+// Invoice / QR scan
+router.get('/api/booking/invoice', (request, env) => campsController.getBookingByInvoice(request, env));
+
+// Service Wizard routes - initialization
+router.post('/api/admin/init-service-wizard-tables', (request, env) => serviceWizardController.initServiceWizardTables(request, env));
+
+// Service Wizard routes - draft management
+router.post('/api/service-wizard/draft/save', (request, env) => serviceWizardController.saveDraft(request, env));
+router.get('/api/service-wizard/draft/load', (request, env) => serviceWizardController.loadDraft(request, env));
+router.delete('/api/service-wizard/draft/delete', (request, env) => serviceWizardController.deleteDraft(request, env));
 
 // Press release routes (public)
 router.get('/api/press', (request, env) => contentManagementController.getPressReleases(request, env));
@@ -405,9 +473,49 @@ router.post('/api/migrate/add-service-addresses', async (request, env) => {
     }), {
       headers: { 'Content-Type': 'application/json' }
     }));
-
   } catch (error) {
-    console.error('❌ Migration error:', error);
+    console.error('Migration error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Migration failed: ' + error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+});
+
+// Migration endpoint to add serviceable_pincodes column
+router.post('/api/migrate/add-serviceable-pincodes', async (request, env) => {
+  try {
+    // Check if serviceable_pincodes column already exists
+    const tableInfo = await env.KUDDL_DB.prepare(`PRAGMA table_info(providers)`).all();
+    const existingCols = new Set((tableInfo.results || []).map((r) => r.name));
+
+    if (existingCols.has('serviceable_pincodes')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: true,
+        message: 'serviceable_pincodes column already exists'
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    // Add serviceable_pincodes column
+    await env.KUDDL_DB.prepare(`
+      ALTER TABLE providers ADD COLUMN serviceable_pincodes TEXT
+    `).run();
+
+    console.log(' Added serviceable_pincodes column to providers table');
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Successfully added serviceable_pincodes column to providers table'
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  } catch (error) {
+    console.error('Migration error:', error);
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
       message: 'Migration failed: ' + error.message
@@ -676,12 +784,51 @@ router.get('/api/partner/profile', async (request, env) => {
     console.log('👤 User role:', authedUser.role, 'ID:', authedUser.id);
     console.log('🔍 Full authedUser object:', JSON.stringify(authedUser, null, 2));
 
-    // For admin tokens, return minimal admin profile to keep portal functional
+    // If admin is fetching a specific partner's profile via ?providerId=, return that partner's data
+    const profileUrl = new URL(request.url);
+    const queryProviderId = profileUrl.searchParams.get('providerId');
+
+    if (authedUser.role === 'admin' && queryProviderId) {
+      try {
+        const provider = await env.KUDDL_DB.prepare(
+          'SELECT * FROM providers WHERE id = ?'
+        ).bind(queryProviderId).first();
+
+        if (!provider) {
+          return addCorsHeaders(new Response(JSON.stringify({
+            success: false,
+            message: 'Partner not found'
+          }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+        }
+
+        const profileWithPublicUrls = convertProfileUrlsToPublic(provider, env);
+
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: true,
+          data: profileWithPublicUrls,
+          user: profileWithPublicUrls
+        }), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          }
+        }));
+      } catch (err) {
+        console.error('❌ Admin fetching partner profile error:', err);
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'Database error while fetching partner profile'
+        }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+      }
+    }
+
+    // For admin tokens (no providerId), return minimal admin profile to keep portal functional
     if (authedUser.role === 'admin') {
       try {
+        // SELECT * so this tolerates schema differences between environments
+        // (some DBs have `name`, others `full_name`; `profile_image_url` may be absent).
         const admin = await env.KUDDL_DB.prepare(`
-          SELECT id, email, full_name, profile_image_url
-          FROM admins WHERE id = ?
+          SELECT * FROM admins WHERE id = ?
         `).bind(authedUser.id).first();
 
         if (!admin) {
@@ -693,8 +840,9 @@ router.get('/api/partner/profile', async (request, env) => {
         }
 
         console.log('✅ Admin profile found');
-        // Split full_name into first_name and last_name for compatibility
-        const nameParts = (admin.full_name || 'Admin User').split(' ');
+        // Split the admin's name into first/last (column is `name` or `full_name`)
+        const adminName = admin.full_name || admin.name || 'Admin User';
+        const nameParts = adminName.split(' ');
         const firstName = nameParts[0] || 'Admin';
         const lastName = nameParts.slice(1).join(' ') || 'User';
 
@@ -860,12 +1008,9 @@ router.put('/api/partner/profile', async (request, env) => {
 
     // Basic info fields
     if (typeof payload.fullName === 'string') {
-      const parts = payload.fullName.trim().split(' ');
-      updates.first_name = parts[0] || '';
-      updates.last_name = parts.slice(1).join(' ') || '';
+      updates.name = payload.fullName.trim();
     }
-    if (typeof payload.first_name === 'string') updates.first_name = payload.first_name;
-    if (typeof payload.last_name === 'string') updates.last_name = payload.last_name;
+    if (typeof payload.name === 'string') updates.name = payload.name;
     if (typeof payload.email === 'string') updates.email = payload.email;
     if (typeof payload.phone === 'string') updates.phone = payload.phone;
     if (typeof payload.address === 'string') updates.address = payload.address;
@@ -878,9 +1023,29 @@ router.put('/api/partner/profile', async (request, env) => {
     // Services fields
     if (typeof payload.service_categories === 'string') updates.service_categories = payload.service_categories;
     if (typeof payload.specific_services === 'string') updates.specific_services = payload.specific_services;
+
+    // service_types (Deliverable 1): accept CSV or array of registry IDs and auto-derive ABCD categories.
+    let serviceTypeIds = null;
+    if (Array.isArray(payload.service_types)) {
+      serviceTypeIds = payload.service_types.filter(Boolean);
+    } else if (typeof payload.service_types === 'string' && payload.service_types.trim().length > 0) {
+      serviceTypeIds = payload.service_types.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (serviceTypeIds && serviceTypeIds.length > 0) {
+      updates.service_types = serviceTypeIds.join(',');
+      try {
+        const autoTags = await serviceTypeController.deriveCategoriesFromServiceTypes(env, serviceTypeIds);
+        if (autoTags.length > 0) {
+          updates.service_categories = autoTags.join(',');
+        }
+      } catch (e) {
+        console.warn('service_types auto-tag failed:', e?.message);
+      }
+    }
     if (typeof payload.age_groups === 'string') updates.age_groups = payload.age_groups;
     if (typeof payload.qualifications === 'string') updates.qualifications = payload.qualifications;
-    if (typeof payload.description === 'string') updates.description = payload.description;
+    if (typeof payload.description === 'string') updates.bio = payload.description;
+    if (typeof payload.bio === 'string') updates.bio = payload.bio;
     if (typeof payload.languages === 'string') updates.languages = payload.languages;
     if (typeof payload.experience_years !== 'undefined') {
       const exp = parseInt(payload.experience_years, 10);
@@ -1014,6 +1179,140 @@ router.put('/api/partner/profile', async (request, env) => {
     await env.KUDDL_DB.prepare(`
       UPDATE providers SET ${setClause}, updated_at = ? WHERE id = ?
     `).bind(...values).run();
+
+    // Also sync availability data to proper availability tables
+    try {
+      // Sync partner type and buffer time to partner_availability_settings table
+      if (payload.partner_type || payload.buffer_time_minutes !== undefined) {
+        await env.KUDDL_DB.prepare(`
+          CREATE TABLE IF NOT EXISTS partner_availability_settings (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL UNIQUE,
+            partner_type TEXT CHECK (partner_type IN ('solo', 'academy')) NOT NULL DEFAULT 'solo',
+            buffer_time_minutes INTEGER DEFAULT 30,
+            calendar_sync_enabled INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+
+        await env.KUDDL_DB.prepare(`
+          INSERT INTO partner_availability_settings (
+            id, provider_id, partner_type, buffer_time_minutes, calendar_sync_enabled, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(provider_id) DO UPDATE SET
+            partner_type = excluded.partner_type,
+            buffer_time_minutes = excluded.buffer_time_minutes,
+            updated_at = excluded.updated_at
+        `).bind(
+          crypto.randomUUID(),
+          authedUser.id,
+          payload.partner_type || 'solo',
+          payload.buffer_time_minutes || 30,
+          payload.calendar_sync_enabled ? 1 : 0,
+          new Date().toISOString(),
+          new Date().toISOString()
+        ).run();
+        console.log('✅ Partner type synced to partner_availability_settings table');
+      }
+
+      // Sync working hours to partner_working_hours table (for solo partners)
+      if (payload.working_hours && (payload.partner_type === 'solo' || !payload.partner_type)) {
+        try {
+          await env.KUDDL_DB.prepare(`
+            CREATE TABLE IF NOT EXISTS partner_working_hours (
+              id TEXT PRIMARY KEY,
+              provider_id TEXT NOT NULL UNIQUE,
+              working_hours_json TEXT NOT NULL,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+            )
+          `).run();
+
+          const workingHoursJson = typeof payload.working_hours === 'string' 
+            ? payload.working_hours 
+            : JSON.stringify(payload.working_hours);
+
+          await env.KUDDL_DB.prepare(`
+            INSERT INTO partner_working_hours (
+              id, provider_id, working_hours_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              working_hours_json = excluded.working_hours_json,
+              updated_at = excluded.updated_at
+          `).bind(
+            crypto.randomUUID(),
+            authedUser.id,
+            workingHoursJson,
+            new Date().toISOString(),
+            new Date().toISOString()
+          ).run();
+          console.log('✅ Working hours synced to partner_working_hours table');
+        } catch (whError) {
+          console.log('⚠️ Could not sync working hours:', whError.message);
+        }
+      }
+
+      // Sync batch timings to academy_batch_timings table (for academy partners)
+      if (payload.batch_timings && payload.partner_type === 'academy') {
+        try {
+          await env.KUDDL_DB.prepare(`
+            CREATE TABLE IF NOT EXISTS academy_batch_timings (
+              id TEXT PRIMARY KEY,
+              provider_id TEXT NOT NULL,
+              batch_name TEXT NOT NULL,
+              day_of_week INTEGER NOT NULL CHECK (day_of_week >= 0 AND day_of_week <= 6),
+              start_time TEXT NOT NULL,
+              duration_minutes INTEGER NOT NULL DEFAULT 120,
+              max_capacity INTEGER NOT NULL DEFAULT 15,
+              current_bookings INTEGER DEFAULT 0,
+              is_active BOOLEAN DEFAULT TRUE,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (provider_id) REFERENCES providers(id)
+            )
+          `).run();
+
+          const batchTimings = typeof payload.batch_timings === 'string' 
+            ? JSON.parse(payload.batch_timings) 
+            : payload.batch_timings;
+
+          if (Array.isArray(batchTimings)) {
+            // Delete existing batch timings for this provider
+            await env.KUDDL_DB.prepare(`
+              DELETE FROM academy_batch_timings WHERE provider_id = ?
+            `).bind(authedUser.id).run();
+
+            // Insert new batch timings
+            for (const batch of batchTimings) {
+              await env.KUDDL_DB.prepare(`
+                INSERT INTO academy_batch_timings (
+                  id, provider_id, batch_name, day_of_week, start_time, duration_minutes, max_capacity, is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).bind(
+                crypto.randomUUID(),
+                authedUser.id,
+                batch.batch_name || 'Default Batch',
+                batch.day_of_week || 0,
+                batch.start_time || '09:00',
+                batch.duration_minutes || 120,
+                batch.max_capacity || 15,
+                batch.is_active !== false,
+                new Date().toISOString(),
+                new Date().toISOString()
+              ).run();
+            }
+            console.log('✅ Batch timings synced to academy_batch_timings table');
+          }
+        } catch (btError) {
+          console.log('⚠️ Could not sync batch timings:', btError.message);
+        }
+      }
+    } catch (syncError) {
+      console.log('⚠️ Could not sync availability tables:', syncError.message);
+      // Don't fail the profile update if sync fails
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -1963,6 +2262,10 @@ router.post('/api/admin/init-database', async (request, env) => {
   return adminController.initDatabase(request, env);
 });
 
+router.post('/api/admin/add-provider-coordinates', async (request, env) => {
+  return addProviderCoordinatesController.addProviderCoordinates(request, env);
+});
+
 // Fix categories table schema
 router.post('/api/admin/fix-categories-schema', async (request, env) => {
   try {
@@ -2493,7 +2796,7 @@ router.post('/api/debug/test-login', async (request, env) => {
 });
 
 router.get('/api/admin/partners', async (request, env) => {
-  return adminController.getPartners(request, env);
+  return adminController.getAllPartners(request, env);
 });
 
 router.get('/api/admin/partners/:id/documents', async (request, env) => {
@@ -2532,6 +2835,10 @@ router.post('/api/parent/profile', async (request, env) => {
 
 router.put('/api/parent/profile', async (request, env) => {
   return parentController.updateParentProfile(request, env);
+});
+
+router.post('/api/parent/upload-profile-picture', async (request, env) => {
+  return parentController.uploadParentProfilePicture(request, env);
 });
 
 router.get('/api/parent/children', async (request, env) => {
@@ -2670,8 +2977,7 @@ router.get('/api/products', async (request, env) => {
           s.available_pincodes,
           s.primary_image_url,
           p.business_name,
-          p.first_name,
-          p.last_name,
+          p.name,
           p.average_rating
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
@@ -2699,7 +3005,7 @@ router.get('/api/products', async (request, env) => {
         available: true,
         pincode: pincode,
         price_type: service.price_type,
-        provider_name: service.business_name || `${service.first_name || ''} ${service.last_name || ''}`.trim() || 'Service Provider',
+        provider_name: service.business_name || service.name || 'Service Provider',
         image_url: service.primary_image_url
       }));
 
@@ -2914,6 +3220,27 @@ router.delete('/api/admin/partners/:id', async (request, env) => {
 // Get partner documents from providers table (direct URLs)
 router.get('/api/admin/partners/:id/document-urls', async (request, env) => {
   return adminController.getPartnerDocumentUrls(request, env);
+});
+
+// Admin Partner Management Routes - Services & Camps
+router.get('/api/admin/partners/:partnerId', async (request, env) => {
+  return adminPartnerManagementController.getPartnerInfo(request, env);
+});
+
+router.get('/api/admin/partners/:partnerId/services', async (request, env) => {
+  return adminPartnerManagementController.getPartnerServices(request, env);
+});
+
+router.delete('/api/admin/partners/:partnerId/services/:serviceId', async (request, env) => {
+  return adminPartnerManagementController.deletePartnerService(request, env);
+});
+
+router.get('/api/admin/partners/:partnerId/camps', async (request, env) => {
+  return adminPartnerManagementController.getPartnerCamps(request, env);
+});
+
+router.delete('/api/admin/partners/:partnerId/camps/:campId', async (request, env) => {
+  return adminPartnerManagementController.deletePartnerCamp(request, env);
 });
 
 // Duplicate route removed - already defined above
@@ -3240,6 +3567,35 @@ router.get('/api/pincodes/check', async (request, env) => {
   }
 });
 
+// List all pincodes endpoint
+router.get('/api/pincodes/list', async (request, env) => {
+  try {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get('limit') || '500');
+    
+    const results = await env.KUDDL_DB.prepare(`
+      SELECT pincode, city, state, area 
+      FROM pincodes 
+      WHERE is_active = 1
+      ORDER BY city, pincode
+      LIMIT ?
+    `).bind(limit).all();
+
+    return createApiResponse({
+      success: true,
+      data: results.results || [],
+      count: results.results?.length || 0
+    });
+  } catch (error) {
+    console.error('Pincode list error:', error);
+    return createApiResponse({
+      success: false,
+      message: 'Failed to fetch pincodes',
+      error: error.message
+    }, 500);
+  }
+});
+
 // Enhanced location search endpoint
 router.get('/api/pincodes/search', async (request, env) => {
   try {
@@ -3426,9 +3782,8 @@ router.get('/api/public/services-all', async (request, env) => {
           s.provider_id,
           p.id as provider_db_id,
           p.business_name,
-          p.first_name,
-          p.last_name,
-          p.profile_image_url,
+          p.name,
+          p.profile_picture as profile_image_url,
           p.city,
           p.state,
           p.experience_years,
@@ -3499,9 +3854,7 @@ router.get('/api/public/services-all', async (request, env) => {
           provider: {
             id: service.provider_id,
             businessName: service.business_name || 'Service Provider',
-            name: service.first_name && service.last_name ? `${service.first_name} ${service.last_name}` : 'Service Provider',
-            first_name: service.first_name || 'Service',
-            last_name: service.last_name || 'Provider',
+            name: service.name || 'Service Provider',
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
@@ -4034,6 +4387,50 @@ router.get('/api/public/top-subcategories', async (request, env) => {
   return servicesController.getTopSubcategories(request, env);
 });
 
+// Latest services + camps combined for "Recently Added" section
+router.get('/api/public/latest', async (request, env) => {
+  try {
+    const limit = parseInt(new URL(request.url).searchParams.get('limit') || '8');
+    const [services, camps] = await Promise.all([
+      env.KUDDL_DB.prepare(`
+        SELECT s.id, s.name as title, s.description, s.price, s.price_type, s.primary_image_url,
+               s.image_urls, s.created_at, 'service' as item_type,
+               p.business_name as provider_name, p.city
+        FROM services s
+        LEFT JOIN providers p ON s.provider_id = p.id
+        WHERE s.status = 'active' AND COALESCE(s.is_verified, 0) = 1
+        ORDER BY s.created_at DESC LIMIT ?
+      `).bind(limit).all(),
+      env.KUDDL_DB.prepare(`
+        SELECT c.id, c.title, c.description, c.price, c.price_type, c.primary_image_url,
+               c.image_urls, c.created_at, 'camp' as item_type,
+               p.business_name as provider_name, c.city
+        FROM camps c
+        LEFT JOIN providers p ON c.provider_id = p.id
+        WHERE c.status = 'active' AND COALESCE(c.is_verified, 0) = 1 AND c.end_date >= date('now')
+        ORDER BY c.created_at DESC LIMIT ?
+      `).bind(limit).all().catch(() => ({ results: [] })),
+    ]);
+
+    const allItems = [
+      ...(services.results || []).map(s => ({
+        ...s,
+        image_urls: s.image_urls ? JSON.parse(s.image_urls) : [],
+      })),
+      ...(camps.results || []).map(c => ({
+        ...c,
+        image_urls: c.image_urls ? JSON.parse(c.image_urls) : [],
+      })),
+    ]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, limit);
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, data: allItems }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+});
+
 // IMPORTANT: /api/services/my-services must be BEFORE /api/services
 router.get('/api/services/my-services', async (request, env) => {
   return servicesController.getMyServices(request, env);
@@ -4055,9 +4452,94 @@ router.delete('/api/services/:id', async (request, env) => {
   return servicesController.deleteService(request, env);
 });
 
+router.patch('/api/services/:id', async (request, env) => {
+  return servicesController.updateService(request, env);
+});
+
+// PUT alias — the admin "Edit service" form posts PUT, so both verbs reach updateService.
+router.put('/api/services/:id', async (request, env) => {
+  return servicesController.updateService(request, env);
+});
+
 router.post('/api/services', async (request, env) => {
   return servicesController.createService(request, env);
 });
+
+// ---- Batches (Camp Architecture v2.0 — Multi-Variant Booking) ----
+router.get('/api/service-detail/:type/:id', (request, env) => batchesController.getParentWithBatches(request, env));
+router.get('/api/batches', (request, env) => batchesController.listBatches(request, env));
+router.post('/api/batches', (request, env) => batchesController.createBatch(request, env));
+router.post('/api/batches/bulk', (request, env) => batchesController.bulkBatchAction(request, env));
+router.get('/api/batches/:id', (request, env) => batchesController.getBatch(request, env));
+router.put('/api/batches/:id', (request, env) => batchesController.updateBatch(request, env));
+
+// Admin service management routes
+router.get('/api/admin/services', async (request, env) => {
+  return servicesController.getAllServicesForAdmin(request, env);
+});
+
+router.patch('/api/admin/services/:id/approve', async (request, env) => {
+  return servicesController.approveService(request, env);
+});
+
+router.patch('/api/admin/services/:id/reject', async (request, env) => {
+  return servicesController.rejectService(request, env);
+});
+
+// Admin camp management routes (approval/rejection gating customer portal visibility)
+router.get('/api/admin/camps', async (request, env) => {
+  return campsController.getAllCampsForAdmin(request, env);
+});
+
+router.patch('/api/admin/camps/:id/approve', async (request, env) => {
+  return campsController.approveCamp(request, env);
+});
+
+router.patch('/api/admin/camps/:id/reject', async (request, env) => {
+  return campsController.rejectCamp(request, env);
+});
+
+// Admin: create a partner account on behalf of someone (sub-router in
+// src/routes/adminRoutes.js is never mounted in this worker, so register
+// directly here).
+router.post('/api/admin/create-partner', (request, env) =>
+  adminController.createPartner(request, env)
+);
+
+// MPIN — quick-login PIN that customers / partners can set after profile setup
+// and use instead of an SMS OTP each time.
+router.get('/api/auth/mpin/status', (request, env) =>
+  mpinController.getMpinStatus(request, env)
+);
+router.post('/api/customer/mpin/set', (request, env) =>
+  mpinController.setCustomerMpin(request, env)
+);
+router.delete('/api/customer/mpin', (request, env) =>
+  mpinController.clearCustomerMpin(request, env)
+);
+router.post('/api/customer/mpin/login', (request, env) =>
+  mpinController.loginCustomerWithMpin(request, env)
+);
+router.post('/api/partner/mpin/set', (request, env) =>
+  mpinController.setPartnerMpin(request, env)
+);
+router.delete('/api/partner/mpin', (request, env) =>
+  mpinController.clearPartnerMpin(request, env)
+);
+router.post('/api/partner/mpin/login', (request, env) =>
+  mpinController.loginPartnerWithMpin(request, env)
+);
+
+// Public partner application form ("Become a partner") + admin moderation
+router.post('/api/public/partner-applications', (request, env) =>
+  partnerApplicationsController.submitPartnerApplication(request, env)
+);
+router.get('/api/admin/partner-applications', (request, env) =>
+  partnerApplicationsController.listPartnerApplications(request, env)
+);
+router.patch('/api/admin/partner-applications/:id', (request, env) =>
+  partnerApplicationsController.updatePartnerApplication(request, env)
+);
 
 // Lenient public services endpoint (for testing)
 router.get('/api/public/services-all', async (request, env) => {
@@ -4165,28 +4647,77 @@ router.get('/api/public/services/:id', async (request, env) => {
       }));
     }
 
-    // Query for specific service with provider details (less restrictive)
+    // Query for specific service with provider details. Only return if admin-verified.
     const service = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         s.id, s.name, s.description, s.category_id, s.subcategory_id,
         s.price_type, s.price, s.duration_minutes, s.features,
         s.available_pincodes, s.created_at, s.provider_id, s.status,
         s.image_urls, s.primary_image_url,
-        p.id as provider_db_id, p.business_name, p.first_name, p.last_name,
-        p.profile_image_url, p.city, p.state, p.is_active, p.kyc_status
+        p.id as provider_db_id, p.business_name, p.name as provider_name,
+        p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
-      WHERE s.id = ? AND p.id IS NOT NULL
+      WHERE s.id = ? AND p.id IS NOT NULL AND COALESCE(s.is_verified, 0) = 1
     `).bind(serviceId).first();
 
+    // If not found in services, check the camps table (also gated by verification)
     if (!service) {
+      const camp = await env.KUDDL_DB.prepare(`
+        SELECT c.*, p.business_name, p.name as provider_name, p.profile_picture as provider_profile_image
+        FROM camps c
+        LEFT JOIN providers p ON c.provider_id = p.id
+        WHERE c.id = ? AND COALESCE(c.is_verified, 0) = 1
+      `).bind(serviceId).first();
+
+      if (!camp) {
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'Service not found'
+        }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+      }
+
+      let campImageUrls = [];
+      try { campImageUrls = camp.image_urls ? JSON.parse(camp.image_urls) : []; } catch (e) {}
+
+      const campAsService = {
+        id: camp.id,
+        item_type: 'camp',
+        provider_id: camp.provider_id,
+        name: camp.title,
+        description: camp.description,
+        price_type: 'fixed',
+        priceType: 'fixed',
+        price: camp.price,
+        start_date: camp.start_date,
+        end_date: camp.end_date,
+        schedule_time: camp.schedule_time,
+        duration_days: camp.duration_days,
+        age_min: camp.age_min,
+        age_max: camp.age_max,
+        location: camp.location,
+        city: camp.city,
+        features: camp.features ? JSON.parse(camp.features) : [],
+        images: campImageUrls,
+        primaryImage: camp.primary_image_url,
+        primary_image_url: camp.primary_image_url,
+        provider: {
+          id: camp.provider_id,
+          businessName: camp.business_name,
+          name: camp.provider_name || camp.business_name || 'Camp Organizer',
+          first_name: camp.provider_name || camp.business_name || 'Camp',
+          last_name: '',
+          profileImage: camp.provider_profile_image,
+          profile_image_url: camp.provider_profile_image,
+          city: camp.city,
+          business_name: camp.business_name,
+        }
+      };
+
       return addCorsHeaders(new Response(JSON.stringify({
-        success: false,
-        message: 'Service not found'
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      }));
+        success: true,
+        data: campAsService
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }
 
     // Transform service data
@@ -4214,9 +4745,9 @@ router.get('/api/public/services/:id', async (request, env) => {
       provider: {
         id: service.provider_id,
         businessName: service.business_name,
-        name: `${service.first_name} ${service.last_name}`,
-        first_name: service.first_name,
-        last_name: service.last_name,
+        name: service.provider_name || service.business_name || 'Service Provider',
+        first_name: service.provider_name || service.business_name || 'Service',
+        last_name: '',
         profileImage: service.profile_image_url,
         profile_image_url: service.profile_image_url,
         location: `${service.city}, ${service.state}`,
@@ -4321,7 +4852,8 @@ router.post('/api/temp/upload-image', async (request, env) => {
     // 2. Get partner ID from token
     const decoded = jwt.decode(token);
     const payload = decoded.payload || decoded;
-    const partnerId = payload.id || payload.sub || payload.userId || payload.provider_id || payload.user_id;
+    // Support partner tokens (id), service worker tokens (providerId camelCase), and legacy keys
+    const partnerId = payload.id || payload.sub || payload.userId || payload.provider_id || payload.providerId || payload.user_id;
     
     if (!partnerId) {
       return addCorsHeaders(new Response(JSON.stringify({
@@ -4476,13 +5008,13 @@ router.post('/api/services/:serviceId/move-temp-images', async (request, env) =>
     const primaryImage = movedImages.length > 0 ? movedImages[0] : null;
 
     // 5. Update service with new image URLs
+    // Store as JSON string in the 'images' column
     await env.KUDDL_DB.prepare(`
       UPDATE services 
-      SET image_urls = ?, primary_image_url = ?, updated_at = ?
+      SET images = ?, updated_at = ?
       WHERE id = ?
     `).bind(
       JSON.stringify(movedImages),
-      primaryImage,
       new Date().toISOString(),
       serviceId
     ).run();

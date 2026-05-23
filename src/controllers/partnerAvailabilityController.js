@@ -760,25 +760,29 @@ export async function savePartnerAvailability(request, env) {
       console.log('✅ Test provider created successfully');
     }
 
-    // Step 1: Ensure partner_types table exists and save partner type
+    // Step 1: Ensure partner_availability_settings table exists and save partner type
     await env.KUDDL_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS partner_types (
+      CREATE TABLE IF NOT EXISTS partner_availability_settings (
         id TEXT PRIMARY KEY,
         provider_id TEXT NOT NULL UNIQUE,
         partner_type TEXT CHECK (partner_type IN ('solo', 'academy')) NOT NULL DEFAULT 'solo',
         buffer_time_minutes INTEGER DEFAULT 30,
         calendar_sync_enabled INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
 
     await env.KUDDL_DB.prepare(`
-      INSERT OR REPLACE INTO partner_types (
+      INSERT INTO partner_availability_settings (
         id, provider_id, partner_type, buffer_time_minutes, calendar_sync_enabled,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(provider_id) DO UPDATE SET
+        partner_type = excluded.partner_type,
+        buffer_time_minutes = excluded.buffer_time_minutes,
+        calendar_sync_enabled = excluded.calendar_sync_enabled,
+        updated_at = excluded.updated_at
     `).bind(
       generateId(),
       providerId,
@@ -789,7 +793,7 @@ export async function savePartnerAvailability(request, env) {
       new Date().toISOString()
     ).run();
 
-    console.log('✅ Partner type saved to partner_types table');
+    console.log('✅ Partner type saved to partner_availability_settings table');
 
     // Step 2: Save working hours for solo partners (single JSON entry)
     if (partnerType === 'solo' && workingHours && Array.isArray(workingHours)) {
@@ -881,29 +885,43 @@ export async function savePartnerAvailability(request, env) {
       console.log('✅ Batch timings saved to partner_batch_timings table');
     }
 
-    // Step 4: Also save to legacy partner_availability table for backward compatibility
-    await env.KUDDL_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS partner_availability (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        provider_id TEXT NOT NULL UNIQUE,
-        working_hours TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (provider_id) REFERENCES providers(id)
-      )
-    `).run();
+    // Step 4: Also save working_hours to partner_availability table for backward compatibility
+    try {
+      const workingHoursJson = JSON.stringify(workingHours || []);
+      
+      // First try to update existing record
+      const updateResult = await env.KUDDL_DB.prepare(`
+        UPDATE partner_availability 
+        SET working_hours = ?, updated_at = ?
+        WHERE provider_id = ?
+      `).bind(
+        workingHoursJson,
+        new Date().toISOString(),
+        providerId
+      ).run();
 
-    const workingHoursJson = JSON.stringify(workingHours || []);
-    await env.KUDDL_DB.prepare(`
-      INSERT OR REPLACE INTO partner_availability (
-        provider_id, working_hours, created_at, updated_at
-      ) VALUES (?, ?, ?, ?)
-    `).bind(
-      providerId,
-      workingHoursJson,
-      new Date().toISOString(),
-      new Date().toISOString()
-    ).run();
+      // If no rows updated, insert a new record
+      if (updateResult.meta.changes === 0) {
+        await env.KUDDL_DB.prepare(`
+          INSERT INTO partner_availability (
+            id, provider_id, day_of_week, start_time, end_time, is_available, working_hours, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          crypto.randomUUID(),
+          providerId,
+          0, // day_of_week placeholder
+          '09:00', // start_time placeholder
+          '18:00', // end_time placeholder
+          1, // is_available
+          workingHoursJson,
+          new Date().toISOString(),
+          new Date().toISOString()
+        ).run();
+      }
+      console.log('✅ Working hours saved to partner_availability table');
+    } catch (paError) {
+      console.log('⚠️ Could not save to partner_availability table:', paError.message);
+    }
 
     console.log('✅ Partner availability saved successfully to all tables');
 

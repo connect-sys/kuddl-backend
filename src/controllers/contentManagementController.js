@@ -23,13 +23,10 @@ export async function createBlogPost(request, env) {
 
     await env.KUDDL_DB.prepare(`
       INSERT INTO blog_posts (
-        id, title, slug, excerpt, content, category, author, 
+        id, title, slug, excerpt, content, category, author_id, 
         featured_image, tags, status, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `).bind(
-      id, title, generatedSlug, excerpt || '', content, category || 'General',
-      author, featured_image || '', tags || '', status || 'draft'
-    ).run();
+    `).bind(id, title, generatedSlug, excerpt || '', content, category || 'General', author, featured_image || '', tags || '', status || 'draft').run();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -131,7 +128,7 @@ export async function updateBlogPost(request, env) {
     await env.KUDDL_DB.prepare(`
       UPDATE blog_posts 
       SET title = ?, slug = ?, excerpt = ?, content = ?, category = ?, 
-          author = ?, featured_image = ?, tags = ?, status = ?, updated_at = datetime('now')
+          author_id = ?, featured_image = ?, tags = ?, status = ?, updated_at = datetime('now')
       WHERE id = ?
     `).bind(title, slug, excerpt, content, category, author, featured_image, tags, status, id).run();
 
@@ -196,13 +193,10 @@ export async function createJobPosting(request, env) {
 
     await env.KUDDL_DB.prepare(`
       INSERT INTO job_postings (
-        id, title, department, location, type, description, 
-        requirements, responsibilities, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `).bind(
-      id, title, department || '', location || 'Remote', type || 'Full-time',
-      description, requirements || '', responsibilities || '', status || 'active'
-    ).run();
+        id, title, description, requirements, location, employment_type, 
+        salary_range, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).bind(id, title, description, requirements || '', location || '', type || '', '', status === 'active' ? 1 : 0).run();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -223,13 +217,19 @@ export async function createJobPosting(request, env) {
 export async function getJobPostings(request, env) {
   try {
     const url = new URL(request.url);
-    const status = url.searchParams.get('status') || 'active';
+    const status = url.searchParams.get('status');
 
-    const jobs = await env.KUDDL_DB.prepare(`
-      SELECT * FROM job_postings 
-      WHERE status = ? 
-      ORDER BY created_at DESC
-    `).bind(status).all();
+    let query = `SELECT * FROM job_postings`;
+    const params = [];
+    
+    if (status) {
+      query += ` WHERE is_active = ?`;
+      params.push(status === 'active' ? 1 : 0);
+    }
+    
+    query += ` ORDER BY created_at DESC`;
+
+    const jobs = await env.KUDDL_DB.prepare(query).bind(...params).all();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -259,10 +259,10 @@ export async function updateJobPosting(request, env) {
 
     await env.KUDDL_DB.prepare(`
       UPDATE job_postings 
-      SET title = ?, department = ?, location = ?, type = ?, description = ?, 
-          requirements = ?, responsibilities = ?, status = ?, updated_at = datetime('now')
+      SET title = ?, description = ?, requirements = ?, location = ?, 
+          employment_type = ?, is_active = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).bind(title, department, location, type, description, requirements, responsibilities, status, id).run();
+    `).bind(title, description, requirements, location, type, status === 'active' ? 1 : 0, id).run();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -325,11 +325,16 @@ export async function createPressRelease(request, env) {
 
     await env.KUDDL_DB.prepare(`
       INSERT INTO press_releases (
-        id, title, date, excerpt, content, link, status, created_at, updated_at
+        id, title, date, content, media_contact, attachments, is_published, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `).bind(
-      id, title, date || new Date().toISOString().split('T')[0], 
-      excerpt || '', content, link || '', status || 'published'
+      id, 
+      title, 
+      date || new Date().toISOString().split('T')[0], 
+      content, 
+      link || '', 
+      '', 
+      status === 'published' ? 1 : 0
     ).run();
 
     return addCorsHeaders(new Response(JSON.stringify({
@@ -351,13 +356,19 @@ export async function createPressRelease(request, env) {
 export async function getPressReleases(request, env) {
   try {
     const url = new URL(request.url);
-    const status = url.searchParams.get('status') || 'published';
+    const status = url.searchParams.get('status');
 
-    const releases = await env.KUDDL_DB.prepare(`
-      SELECT * FROM press_releases 
-      WHERE status = ? 
-      ORDER BY date DESC, created_at DESC
-    `).bind(status).all();
+    let query = `SELECT * FROM press_releases`;
+    const params = [];
+    
+    if (status) {
+      query += ` WHERE is_published = ?`;
+      params.push(status === 'published' ? 1 : 0);
+    }
+    
+    query += ` ORDER BY date DESC, created_at DESC`;
+
+    const releases = await env.KUDDL_DB.prepare(query).bind(...params).all();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -387,9 +398,9 @@ export async function updatePressRelease(request, env) {
 
     await env.KUDDL_DB.prepare(`
       UPDATE press_releases 
-      SET title = ?, date = ?, excerpt = ?, content = ?, link = ?, status = ?, updated_at = datetime('now')
+      SET title = ?, date = ?, content = ?, media_contact = ?, is_published = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).bind(title, date, excerpt, content, link, status, id).run();
+    `).bind(title, date, content, link, status === 'published' ? 1 : 0, id).run();
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -504,6 +515,131 @@ export async function createContentTables(request, env) {
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
       message: 'Failed to create content tables',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// ==================== JOB APPLICATIONS ====================
+
+export async function createJobApplication(request, env) {
+  try {
+    const { job_id, job_title, applicant_name, applicant_email, applicant_phone, resume_url, cover_letter, linkedin_url, portfolio_url, experience_years, current_company } = await request.json();
+
+    if (!job_id || !applicant_name || !applicant_email) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Job ID, name, and email are required'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const id = `app_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    await env.KUDDL_DB.prepare(`
+      INSERT INTO job_applications (
+        id, job_id, job_title, applicant_name, applicant_email, applicant_phone,
+        resume_url, cover_letter, linkedin_url, portfolio_url, experience_years,
+        current_company, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).bind(
+      id, job_id, job_title || '', applicant_name, applicant_email, applicant_phone || '',
+      resume_url || '', cover_letter || '', linkedin_url || '', portfolio_url || '',
+      experience_years || 0, current_company || '', 'pending'
+    ).run();
+
+    // Update applications count on job posting
+    await env.KUDDL_DB.prepare(`
+      UPDATE job_postings 
+      SET applications_count = applications_count + 1, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(job_id).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Application submitted successfully',
+      id: id
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Create job application error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to submit application',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+export async function getJobApplications(request, env) {
+  try {
+    const url = new URL(request.url);
+    const job_id = url.searchParams.get('job_id');
+    const status = url.searchParams.get('status');
+
+    let query = `SELECT * FROM job_applications`;
+    const params = [];
+    const conditions = [];
+
+    if (job_id) {
+      conditions.push('job_id = ?');
+      params.push(job_id);
+    }
+
+    if (status) {
+      conditions.push('status = ?');
+      params.push(status);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+
+    const applications = await env.KUDDL_DB.prepare(query).bind(...params).all();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      applications: applications.results || []
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Get job applications error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to fetch applications',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+export async function updateJobApplicationStatus(request, env) {
+  try {
+    const { id, status } = await request.json();
+
+    if (!id || !status) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Application ID and status are required'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    await env.KUDDL_DB.prepare(`
+      UPDATE job_applications 
+      SET status = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(status, id).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Application status updated successfully'
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Update application status error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to update application status',
       error: error.message
     }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }

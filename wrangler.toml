@@ -1,5 +1,22 @@
 # Cloudflare Workers Configuration for Kuddl Platform
-name = "kuddl-backend-prod"
+#
+# IMPORTANT — secret management
+# ─────────────────────────────────────────────────────────────────────────────
+# This file is committed to source control. NEVER add real secrets here.
+# All sensitive values (JWT, Twilio, SendGrid, Razorpay, Sandbox, etc.)
+# are stored in Cloudflare via `wrangler secret put <KEY> [--env production]`
+# and bound to env.<KEY> at runtime — no code change is needed.
+#
+# To set / rotate a secret:
+#   wrangler secret put JWT_SECRET                         # default (dev)
+#   wrangler secret put JWT_SECRET --env production        # prod
+#
+# To list configured secrets:
+#   wrangler secret list
+#   wrangler secret list --env production
+# ─────────────────────────────────────────────────────────────────────────────
+
+name = "kuddl-backend-dev"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
@@ -9,16 +26,13 @@ account_id = "6a9b1e7bdc83a9d8ec1b28d86ac09d0b"
 [dev]
 port = 8787
 
-# Default Environment Variables (Development)
-# Note: Sensitive values should be set using: wrangler secret put <KEY_NAME>
+# Default (development) non-secret variables.
+# Secrets (JWT_SECRET, TWILIO_*, RAZORPAY_*, SANDBOX_*, SENDGRID_*) are set via
+# `wrangler secret put` and are NOT listed here.
 [vars]
 ENVIRONMENT = "development"
-JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
-TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
-TWILIO_TEST_MODE = "false"
-RAZORPAY_KEY_ID= "rzp_test_S3eWfhLXqCBhRI"
-RAZORPAY_KEY_SECRET= "qhBkLRT18VWXlhRxbPatLcky"
-R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
+TWILIO_TEST_MODE = "true"
+R2_PUBLIC_URL = "https://devassets.kuddl.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "true"
@@ -35,46 +49,39 @@ database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 binding = "KUDDL_STORAGE"
 bucket_name = "kuddl-storage-dev"
 
-# Development Environment Configuration
+# ─── Development environment ───────────────────────────────────────────────
 [env.development]
 workers_dev = true
 
-# Development Environment Variables
 [env.development.vars]
 ENVIRONMENT = "development"
-R2_PUBLIC_URL = "https://dev-assets.kuddl.co"
+TWILIO_TEST_MODE = "true"
+R2_PUBLIC_URL = "https://devassets.kuddl.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "true"
 FRONTEND_URL = "https://dev.partner.kuddl.co"
 
-# Development D1 Database Bindings
 [[env.development.d1_databases]]
 binding = "KUDDL_DB"
 database_name = "kuddl-dev"
 database_id = "710b0b90-1803-490e-990a-97c1893edd67"
 
-# Development R2 Storage Bindings
 [[env.development.r2_buckets]]
 binding = "KUDDL_STORAGE"
 bucket_name = "kuddl-storage-dev"
 
-# Production Environment Configuration
+# ─── Production environment ────────────────────────────────────────────────
 [env.production]
 name = "kuddl-backend-prod"
 workers_dev = false
 
-# Production Custom Domain Routes
 routes = [
   { pattern = "api.kuddl.co/*", zone_name = "kuddl.co" }
 ]
 
-# Production Environment Variables
 [env.production.vars]
 ENVIRONMENT = "production"
-JWT_SECRET = "44e5ac0c0a6fa2b879b67ee0b0b5bc1e223c7c3f8e9d2a1b4c6e8f0a2b4c6e8f0"
-TWILIO_VERIFY_SERVICE_SID = "VA31d23597fb8997f98098c4ef92889bcf"
-TWILIO_MESSAGING_SERVICE_SID = "MG16caccfa2aa7e72205141cdd41df8044"
 TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://prodassets.kuddl.co"
 SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
@@ -82,13 +89,11 @@ SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "false"
 FRONTEND_URL = "https://partner.kuddl.co"
 
-# Production D1 Database Bindings
 [[env.production.d1_databases]]
 binding = "KUDDL_DB"
 database_name = "kuddl-prod"
 database_id = "27348837-2b95-4583-8c27-325bf0a1652c"
 
-# Production R2 Storage Bindings
 [[env.production.r2_buckets]]
 binding = "KUDDL_STORAGE"
 bucket_name = "kuddl-storage-prod"

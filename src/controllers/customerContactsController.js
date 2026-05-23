@@ -25,16 +25,16 @@ export async function getContacts(request, env) {
     const contacts = await env.KUDDL_DB.prepare(`
       SELECT DISTINCT
         p.id,
-        p.full_name,
+        p.name as full_name,
         p.email,
         p.phone,
-        p.profile_image_url,
+        p.profile_picture as profile_image_url,
         MAX(b.created_at) as last_interaction,
         COUNT(b.id) as booking_count
       FROM bookings b
       JOIN providers p ON b.provider_id = p.id
       WHERE b.parent_id = ?
-      GROUP BY p.id, p.full_name, p.email, p.phone, p.profile_image_url
+      GROUP BY p.id, p.name, p.email, p.phone, p.profile_picture
       ORDER BY last_interaction DESC
       LIMIT 50
     `).bind(parentId).all();

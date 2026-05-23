@@ -6,7 +6,6 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import { generateId } from '../utils/helpers.js';
 import { sendNotification } from './notificationController.js';
-import { createOTPForBooking } from './otpServiceController.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 
 // Create booking
@@ -47,9 +46,9 @@ export async function createBooking(request, env) {
     }
 
     const {
-      serviceId, 
-      providerId, 
-      selectedDate, 
+      serviceId,
+      providerId,
+      selectedDate,
       startTime,
       endTime,
       recurring,
@@ -59,7 +58,9 @@ export async function createBooking(request, env) {
       totalAmount,
       paymentStatus,
       paymentId,
-      orderId
+      orderId,
+      // Camp Architecture v2.0 — optional batch this booking is for.
+      batchId
     } = await request.json();
 
     // If no parentId from token, create/find parent using phone from parentDetails
@@ -81,7 +82,7 @@ export async function createBooking(request, env) {
           parentId = generateId();
           await env.KUDDL_DB.prepare(`
             INSERT INTO parents (
-              id, phone, full_name, email, created_at, updated_at
+              id, phone, fullname, email, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
           `).bind(
             parentId,
@@ -135,6 +136,15 @@ export async function createBooking(request, env) {
             const childId = generateId();
             console.log(`🆕 Creating new child with ID: ${childId}`);
             
+            // Calculate DOB from age if not provided
+            let dobForDB = child.dateOfBirth || child.date_of_birth;
+            if (!dobForDB && child.age) {
+              const now = new Date();
+              const birthYear = now.getFullYear() - parseInt(child.age);
+              dobForDB = `01-01-${birthYear}`;
+              console.log(`📅 Calculated DOB from age ${child.age}: ${dobForDB}`);
+            }
+            
             await env.KUDDL_DB.prepare(`
               INSERT INTO children (
                 id, parent_id, name, age, gender, 
@@ -153,7 +163,7 @@ export async function createBooking(request, env) {
               child.dietaryRestrictions || null,
               child.specialNeeds || null,
               child.allergies || null,
-              child.dateOfBirth || null,
+              dobForDB || `01-01-${new Date().getFullYear() - (child.age || 0)}`,
               new Date().toISOString(), 
               new Date().toISOString()
             ).run();
@@ -187,7 +197,7 @@ export async function createBooking(request, env) {
         if (existingParent) {
           // Update existing parent
           const parentUpdates = {};
-          if (parentDetails.fullName || parentDetails.name) parentUpdates.full_name = parentDetails.fullName || parentDetails.name;
+          if (parentDetails.fullName || parentDetails.name) parentUpdates.fullname = parentDetails.fullName || parentDetails.name;
           if (parentDetails.email) parentUpdates.email = parentDetails.email;
           if (parentDetails.phone) parentUpdates.phone = parentDetails.phone;
           if (parentDetails.address) parentUpdates.address = parentDetails.address;
@@ -210,7 +220,7 @@ export async function createBooking(request, env) {
           // Create new parent profile
           await env.KUDDL_DB.prepare(`
             INSERT INTO parents (
-              id, phone, email, full_name, address, city, state, pincode,
+              id, phone, email, fullname, address, city, state, pincode,
               alternate_contact_name, alternate_contact_phone, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
@@ -294,24 +304,26 @@ export async function createBooking(request, env) {
     const initialPaymentStatus = (paymentStatus === 'completed' || paymentStatus === 'paid') ? 'paid' : 'pending';
     const initialPaymentId = paymentId || null;
 
-    // Create booking (using authenticated parentId if available)
-    console.log('🔍 About to create booking with values:', {
-      bookingId,
-      serviceId,
-      parentId,
-      providerId,
-      selectedDate,
-      startTime,
-      endTime,
-      durationMinutes,
-      bookingDetails: JSON.stringify(bookingDetails),
-      initialStatus,
-      baseAmount,
-      platformFee,
-      providerAmount,
-      initialPaymentStatus,
-      initialPaymentId
-    });
+    // Generate invoice and QR code
+    const invoiceId = `INV-${Date.now()}`;
+    const invoiceData = {
+      invoice_id: invoiceId,
+      booking_id: bookingId,
+      service_id: serviceId,
+      provider_id: providerId,
+      parent_id: parentId,
+      parent_name: bookingDetails.parentDetails?.fullName || 'Customer',
+      parent_phone: bookingDetails.parentDetails?.phone || '',
+      booking_date: selectedDate,
+      start_time: startTime,
+      end_time: endTime,
+      total_amount: baseAmount,
+      status: initialStatus,
+      payment_status: initialPaymentStatus,
+      created_at: new Date().toISOString()
+    };
+    const qrPayload = encodeURIComponent(JSON.stringify({ type: 'service_booking', booking_id: bookingId, invoice_id: invoiceId }));
+    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${qrPayload}&size=250x250&format=png`;
 
     const durationHours = durationMinutes / 60;
     
@@ -319,15 +331,30 @@ export async function createBooking(request, env) {
       INSERT INTO bookings (
         id, service_id, parent_id, provider_id, booking_date, selected_date, start_time, end_time,
         duration_hours, duration_minutes, special_requests, status, total_amount, platform_fee, provider_amount,
-        payment_status, payment_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        payment_status, payment_id, invoice_id, invoice_qr_url, invoice_data, batch_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       bookingId, serviceId, parentId, providerId, selectedDate, selectedDate, startTime, endTime,
       durationHours, durationMinutes, JSON.stringify(bookingDetails), initialStatus, baseAmount, platformFee, providerAmount,
-      initialPaymentStatus, initialPaymentId, new Date().toISOString(), new Date().toISOString()
+      initialPaymentStatus, initialPaymentId,
+      invoiceId, invoiceQrUrl, JSON.stringify(invoiceData),
+      batchId || null,
+      new Date().toISOString(), new Date().toISOString()
     ).run();
 
-    console.log('✅ Booking created successfully with parent_id:', parentId);
+    console.log('✅ Booking created with invoice:', invoiceId);
+
+    // Camp Architecture v2.0 — bump booked_seats on the chosen batch.
+    if (batchId) {
+      try {
+        await env.KUDDL_DB.prepare(
+          `UPDATE batches SET booked_seats = COALESCE(booked_seats,0) + 1,
+                              updated_at = ? WHERE id = ?`
+        ).bind(new Date().toISOString(), batchId).run();
+      } catch (seatErr) {
+        console.error('⚠️ Failed to increment booked_seats on batch:', seatErr?.message);
+      }
+    }
 
     // Link payment order to booking if orderId is present
     if (orderId) {
@@ -365,16 +392,6 @@ export async function createBooking(request, env) {
       console.error('❌ Failed to send booking notification:', notificationError);
     }
 
-    // Auto-generate OTP if booking is auto-confirmed (payment already done)
-    if (initialStatus === 'confirmed') {
-      try {
-        await createOTPForBooking(env, bookingId, parentId, providerId);
-        console.log(`✅ OTP auto-generated for confirmed booking ${bookingId}`);
-      } catch (otpErr) {
-        console.error('OTP generation on booking create (non-fatal):', otpErr.message);
-      }
-    }
-
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       message: 'Booking created successfully',
@@ -384,7 +401,10 @@ export async function createBooking(request, env) {
         totalAmount: baseAmount,
         platformFee,
         providerAmount,
-        status: initialStatus
+        status: initialStatus,
+        invoice_id: invoiceId,
+        invoice_qr_url: invoiceQrUrl,
+        invoice_data: invoiceData
       }
     }), {
       headers: { 'Content-Type': 'application/json' }
@@ -516,7 +536,7 @@ export async function getProviderBookings(request, env) {
       SELECT 
         b.*,
         s.name as service_name, s.price_type, s.price, s.description as service_description,
-        p.business_name, p.first_name as provider_first_name, p.last_name as provider_last_name
+        p.business_name, p.name as provider_name
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers p ON b.provider_id = p.id
@@ -685,7 +705,7 @@ export async function getCustomerBookings(request, env) {
         p.first_name as provider_first_name, p.last_name as provider_last_name,
         p.profile_image_url as provider_image,
         p.business_name,
-        parent.full_name as parent_name, parent.phone as parent_phone, parent.email as parent_email
+        parent.fullname as parent_name, parent.phone as parent_phone, parent.email as parent_email
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers p ON b.provider_id = p.id
@@ -894,16 +914,21 @@ export async function acceptBooking(request, env) {
       WHERE id = ?
     `).bind(new Date().toISOString(), new Date().toISOString(), bookingId).run();
 
-    // Auto-generate OTP for service start using shared helper
-    const otpResult = await createOTPForBooking(env, bookingId, booking.parent_id, booking.provider_id);
+    // Generate invoice + QR for confirmed booking
+    let invoiceId = booking.invoice_id;
+    let invoiceQrUrl = booking.invoice_qr_url;
+    if (!invoiceId) {
+      invoiceId = `INV-${Date.now()}`;
+      const qrPayload = encodeURIComponent(JSON.stringify({ type: 'service_booking', booking_id: bookingId, invoice_id: invoiceId }));
+      invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${qrPayload}&size=250x250&format=png`;
+      await env.KUDDL_DB.prepare(`UPDATE bookings SET invoice_id = ?, invoice_qr_url = ? WHERE id = ?`).bind(invoiceId, invoiceQrUrl, bookingId).run();
+    }
 
-    // Notify provider about booking confirmation
+    // Notify provider
     try {
       const bookingDetails = await env.KUDDL_DB.prepare(`
-        SELECT b.*, p.full_name as parent_name
-        FROM bookings b
-        LEFT JOIN parents p ON b.parent_id = p.id
-        WHERE b.id = ?
+        SELECT b.*, COALESCE(p.fullname, p.name, '') as parent_name
+        FROM bookings b LEFT JOIN parents p ON b.parent_id = p.id WHERE b.id = ?
       `).bind(bookingId).first();
 
       const partnerNotificationId = generateId();
@@ -912,23 +937,21 @@ export async function acceptBooking(request, env) {
         VALUES (?, ?, 'provider', 'booking_confirmed', 'Booking Confirmed', ?, ?, ?)
       `).bind(
         partnerNotificationId, booking.provider_id,
-        `Booking confirmed! Ask the parent for the OTP to start the service. Parent: ${bookingDetails?.parent_name || 'Customer'}`,
-        JSON.stringify({ bookingId, parentName: bookingDetails?.parent_name }),
+        `Booking confirmed! Invoice ${invoiceId} generated. Parent: ${bookingDetails?.parent_name || 'Customer'}`,
+        JSON.stringify({ bookingId, invoiceId, parentName: bookingDetails?.parent_name }),
         new Date().toISOString()
       ).run();
     } catch (notifErr) {
       console.error('Provider notification error (non-fatal):', notifErr.message);
     }
 
-    console.log(`✅ Booking ${bookingId} confirmed with OTP generated: ${otpResult.success}`);
-
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       message: 'Booking accepted successfully',
       data: {
         bookingId,
-        otpGenerated: otpResult.success,
-        expiresAt: otpResult.expiresAt || null
+        invoice_id: invoiceId,
+        invoice_qr_url: invoiceQrUrl
       }
     }), {
       headers: { 'Content-Type': 'application/json' }

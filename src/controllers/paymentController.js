@@ -91,20 +91,20 @@ export async function createPaymentOrder(request, env) {
 
     const orderId = razorpayOrder.id;
 
-    // Store payment order in database with booking reference (nullable)
+    // Store payment order in database — omit booking_id entirely when not provided
+    // to avoid NOT NULL constraint failure (booking may not exist yet at payment init)
     const paymentOrderId = generateId();
-    await env.KUDDL_DB.prepare(`
-      INSERT INTO payment_orders (
-        id, amount, currency, status, booking_id, created_at, razorpay_order_id
-      ) VALUES (?, ?, ?, 'created', ?, ?, ?)
-    `).bind(
-      paymentOrderId,
-      amount,
-      currency,
-      bookingId || null,
-      new Date().toISOString(),
-      orderId
-    ).run();
+    if (bookingId) {
+      await env.KUDDL_DB.prepare(`
+        INSERT INTO payment_orders (id, amount, currency, status, booking_id, created_at, razorpay_order_id)
+        VALUES (?, ?, ?, 'created', ?, ?, ?)
+      `).bind(paymentOrderId, amount, currency, bookingId, new Date().toISOString(), orderId).run();
+    } else {
+      await env.KUDDL_DB.prepare(`
+        INSERT INTO payment_orders (id, amount, currency, status, created_at, razorpay_order_id)
+        VALUES (?, ?, ?, 'created', ?, ?)
+      `).bind(paymentOrderId, amount, currency, new Date().toISOString(), orderId).run();
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,

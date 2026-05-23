@@ -355,7 +355,7 @@ export async function getPincodes(request, env) {
     const pincodes = await env.KUDDL_DB.prepare(`
       SELECT DISTINCT pincode, area, city 
       FROM pincodes 
-      WHERE is_active = 1 
+      WHERE is_serviceable = 1 
       ORDER BY pincode, area
     `).all();
 
@@ -393,7 +393,7 @@ export async function checkServiceAvailability(request, env) {
 
     // Check if pincode exists
     const pincodeExists = await env.KUDDL_DB.prepare(
-      'SELECT id FROM pincodes WHERE pincode = ? AND is_active = 1'
+      'SELECT id FROM pincodes WHERE pincode = ? AND is_serviceable = 1'
     ).bind(pincode).first();
 
     if (!pincodeExists) {

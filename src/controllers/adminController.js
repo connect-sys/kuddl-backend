@@ -167,7 +167,7 @@ export async function initDatabase(request, env) {
     await env.KUDDL_DB.prepare(`
       CREATE TABLE document_verifications (
         id TEXT PRIMARY KEY,
-        partner_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
         document_type TEXT NOT NULL,
         document_url TEXT NOT NULL,
         file_name TEXT NOT NULL,
@@ -523,18 +523,17 @@ export async function getPartners(request, env) {
     const stmt = env.KUDDL_DB.prepare(`
       SELECT 
         id,
-        first_name,
-        last_name,
-        COALESCE(first_name, '') || ' ' || COALESCE(last_name, '') as name,
+        COALESCE(name, '') as name,
         email,
         phone,
         business_name as businessName,
-        COALESCE(description, 'Partner') as businessType,
+        'Partner' as businessType,
         address,
         COALESCE(experience_years, 0) as experience_years,
         COALESCE(kyc_status, 'pending') as status,
         COALESCE(kyc_status, 'pending') as kyc_status,
         COALESCE(is_active, 0) as is_active,
+        COALESCE(is_verified, 0) as is_verified,
         created_at as createdAt,
         created_at,
         updated_at
@@ -601,7 +600,7 @@ export async function updatePartnerVerification(request, env) {
         await env.KUDDL_DB.prepare(`
           UPDATE document_verifications 
           SET verification_status = ?, updated_at = ?
-          WHERE id = ? AND partner_id = ?
+          WHERE id = ? AND provider_id = ?
         `).bind(docStatus, new Date().toISOString(), docId, partnerId).run();
       }
     }
@@ -667,7 +666,7 @@ export async function getPartnerDocuments(request, env) {
           file_size,
           mime_type
         FROM document_verifications
-        WHERE partner_id = ?
+        WHERE provider_id = ?
         ORDER BY created_at DESC
       `).bind(partnerId).all();
 
@@ -765,6 +764,177 @@ export async function getPartnerDocuments(request, env) {
 }
 
 // Partner signup endpoint - Updated to handle FormData with documents
+// ---------------------------------------------------------------------------
+// Admin: Create Partner
+// POST /api/admin/create-partner
+//
+// The admin "Create partner" modal in kuddl-partner-web (PartnerManagement.tsx)
+// reuses the same CompleteProfileModal partners use during signup and POSTs the
+// resulting JSON payload here. The route was wired up in src/routes/adminRoutes.js
+// but the handler was missing — calling it produced "failed to complete profile"
+// on the last step. This function fills that gap.
+//
+// Returns the shape the frontend expects:
+//   { success: true, partner: { id, name, email }, temporaryPassword }
+// ---------------------------------------------------------------------------
+export async function createPartner(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Authorization required',
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const jwt = await import('@tsndr/cloudflare-worker-jwt');
+    if (!(await jwt.verify(token, env.JWT_SECRET))) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Invalid token',
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const decoded = jwt.decode(token);
+    if (decoded?.payload?.role !== 'admin') {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Admin access required',
+      }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const body = await request.json().catch(() => ({}));
+
+    // Accept both the rich CompleteProfileModal shape and the minimal name/email/phone form.
+    const fullName = (body.fullName || body.name || '').toString().trim();
+    const email    = (body.email || '').toString().trim();
+    const phone    = (body.phone || '').toString().trim();
+    if (!fullName) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Name is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Valid email is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (!phone) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Phone is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+
+    // Duplicate check - check email and phone separately for better error messages
+    const emailDupe = await env.KUDDL_DB.prepare(
+      'SELECT id FROM providers WHERE email = ? LIMIT 1'
+    ).bind(email).first();
+    if (emailDupe) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: `A partner with email "${email}" already exists. Please use a different email or update the existing partner.`,
+      }), { status: 409, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const phoneDupe = await env.KUDDL_DB.prepare(
+      'SELECT id FROM providers WHERE phone = ? LIMIT 1'
+    ).bind(phone).first();
+    if (phoneDupe) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: `A partner with phone "${phone}" already exists. Please use a different phone number or update the existing partner.`,
+      }), { status: 409, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Same column-presence safeguard that completePartnerProfile uses, so admins
+    // don't get a 500 when the providers table is missing optional columns.
+    const optionalColumns = [
+      { name: 'address', type: 'TEXT' },
+      { name: 'city', type: 'TEXT' },
+      { name: 'state', type: 'TEXT' },
+      { name: 'pincode', type: 'TEXT' },
+      { name: 'area', type: 'TEXT' },
+      { name: 'business_name', type: 'TEXT' },
+      { name: 'date_of_birth', type: 'TEXT' },
+      { name: 'gender', type: 'TEXT' },
+      { name: 'profile_picture', type: 'TEXT' },
+      { name: 'languages', type: 'TEXT' },
+      { name: 'service_categories', type: 'TEXT' },
+      { name: 'specific_services', type: 'TEXT' },
+      { name: 'age_groups', type: 'TEXT' },
+      { name: 'service_types', type: 'TEXT' },
+      { name: 'account_holder_name', type: 'TEXT' },
+      { name: 'bank_name', type: 'TEXT' },
+      { name: 'account_number', type: 'TEXT' },
+      { name: 'ifsc_code', type: 'TEXT' },
+      { name: 'account_type', type: 'TEXT' },
+      { name: 'upi_id', type: 'TEXT' },
+      { name: 'aadhaar_number', type: 'TEXT' },
+      { name: 'pan_number', type: 'TEXT' },
+      { name: 'gst_number', type: 'TEXT' },
+      { name: 'is_aadhaar_verified', type: 'BOOLEAN DEFAULT 0' },
+      { name: 'is_pan_verified', type: 'BOOLEAN DEFAULT 0' },
+      { name: 'is_gst_verified', type: 'BOOLEAN DEFAULT 0' },
+      { name: 'kyc_status', type: 'TEXT DEFAULT "pending"' },
+      { name: 'is_active', type: 'INTEGER DEFAULT 1' },
+      { name: 'created_by_admin', type: 'TEXT' },
+    ];
+    for (const col of optionalColumns) {
+      try {
+        await env.KUDDL_DB.prepare(`ALTER TABLE providers ADD COLUMN ${col.name} ${col.type}`).run();
+      } catch (e) {
+        // Ignore "duplicate column" errors quietly.
+      }
+    }
+
+    // Use the password the admin UI generated and showed the admin. Only fall
+    // back to a server-generated one if the client didn't send it — otherwise
+    // the stored hash would never match the credential the admin was given.
+    const tempPassword =
+      (body.tempPassword || body.password || '').toString().trim() ||
+      (generateRandomPassword ? generateRandomPassword(10) : Math.random().toString(36).slice(2, 12) + 'A1');
+    const hashed = await bcrypt.hash(tempPassword, 10);
+
+    const partnerId = generateId();
+    const businessName = (body.businessName || body.business_name || fullName).toString().trim();
+    const adminId = decoded?.payload?.id || decoded?.payload?.partnerId || null;
+    const now = new Date().toISOString();
+
+    // The providers table uses a single `name` column (no first_name/last_name).
+    await env.KUDDL_DB.prepare(`
+      INSERT INTO providers (
+        id, email, phone, password_hash,
+        name, business_name,
+        address, city, state, area, pincode,
+        date_of_birth, gender, profile_picture,
+        languages, service_categories, specific_services, age_groups, service_types,
+        account_holder_name, bank_name, account_number, ifsc_code, account_type, upi_id,
+        aadhaar_number, pan_number, gst_number,
+        is_aadhaar_verified, is_pan_verified, is_gst_verified,
+        kyc_status, is_active, created_by_admin,
+        bio, experience_years,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+    `).bind(
+      partnerId, email, phone, hashed,
+      fullName, businessName,
+      body.address || null, body.city || null, body.state || null, body.area || null, body.pincode || null,
+      body.dateOfBirth || null, body.gender || null, body.profileImageUrl || null,
+      (body.languages || []).join?.(',') || null,
+      (body.primaryCategories || []).join?.(',') || null,
+      (body.specificServices || []).join?.(',') || null,
+      (body.ageGroups || []).join?.(',') || null,
+      Array.isArray(body.serviceTypes) ? body.serviceTypes.map((s) => s.id || s).join(',') : (body.serviceTypes || null),
+      body.accountHolder || null, body.bankName || null, body.accountNumber || null,
+      body.ifscCode || null, body.accountType || null, body.upiId || null,
+      body.aadhaarNumber || null, body.panNumber || null, body.gstNumber || null,
+      body.isAadhaarVerified ? 1 : 0, body.isPanVerified ? 1 : 0, body.isGstVerified ? 1 : 0,
+      'pending', adminId,
+      body.description || null, parseInt((body.experience || '').toString().split('-')[0]) || 0,
+      now, now,
+    ).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Partner created successfully',
+      partner: { id: partnerId, name: fullName, email, phone },
+      temporaryPassword: tempPassword,
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('Create partner error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to create partner',
+      error: error.message,
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 export async function partnerSignup(request, env) {
   try {
     const formData = await request.formData();
@@ -875,7 +1045,7 @@ export async function partnerSignup(request, env) {
           const documentId = generateId();
           await env.KUDDL_DB.prepare(`
             INSERT INTO document_verifications (
-              id, partner_id, document_type, document_url, file_name, file_size, mime_type, verification_status, created_at, updated_at
+              id, provider_id, document_type, document_url, file_name, file_size, mime_type, verification_status, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
           `).bind(
             documentId, providerId, docType, fileName, file.name, file.size, file.type,
@@ -1593,6 +1763,7 @@ export async function completePartnerProfile(request, env) {
 
     const profileData = await request.json();
     console.log('📝 Profile data received:', profileData);
+    console.log('🔐 Temp password received:', profileData.tempPassword ? 'Yes' : 'No');
 
     // Split fullName into first_name and last_name
     const nameParts = profileData.fullName.trim().split(' ');
@@ -1604,20 +1775,27 @@ export async function completePartnerProfile(request, env) {
       console.log('🔧 Checking and adding missing columns...');
 
       const missingColumns = [
-        'service_categories', 'specific_services', 'age_groups', 'languages',
-        'area', 'date_of_birth', 'gender', 'qualifications',
-        'account_holder_name', 'bank_name', 'account_number',
-        'ifsc_code', 'account_type', 'upi_id',
-        'serviceable_pincodes', 'last_completed_step'
+        { name: 'address', type: 'TEXT' },
+        { name: 'city', type: 'TEXT' },
+        { name: 'state', type: 'TEXT' },
+        { name: 'pincode', type: 'TEXT' },
+        { name: 'business_name', type: 'TEXT' },
+        { name: 'aadhaar_number', type: 'TEXT' },
+        { name: 'pan_number', type: 'TEXT' },
+        { name: 'gst_number', type: 'TEXT' },
+        { name: 'is_aadhaar_verified', type: 'BOOLEAN DEFAULT 0' },
+        { name: 'is_pan_verified', type: 'BOOLEAN DEFAULT 0' },
+        { name: 'is_gst_verified', type: 'BOOLEAN DEFAULT 0' },
+        { name: 'kyc_status', type: 'TEXT DEFAULT "pending"' }
       ];
 
       for (const column of missingColumns) {
         try {
-          await env.KUDDL_DB.prepare(`ALTER TABLE providers ADD COLUMN ${column} TEXT`).run();
-          console.log(`✅ Added column: ${column}`);
+          await env.KUDDL_DB.prepare(`ALTER TABLE providers ADD COLUMN ${column.name} ${column.type}`).run();
+          console.log(`✅ Added column: ${column.name}`);
         } catch (alterError) {
           if (!alterError.message.includes('duplicate column name')) {
-            console.log(`⚠️ Column ${column} might already exist:`, alterError.message);
+            console.log(`⚠️ Column ${column.name} might already exist:`, alterError.message);
           }
         }
       }
@@ -1639,12 +1817,13 @@ export async function completePartnerProfile(request, env) {
     
     console.log(`📝 ${isPartialSave ? 'Partial save' : 'Final completion'} - Step ${lastCompletedStep}`);
 
-    // Hash the temporary password only if provided (final save)
-    const bcrypt = await import('bcryptjs');
-    let hashedPassword = null;
+    // Hash password if provided
+    let passwordHash = null;
     if (profileData.tempPassword) {
-      hashedPassword = await bcrypt.hash(profileData.tempPassword, 10);
-      console.log('🔐 Password hashed for final save');
+      console.log('🔐 Hashing temp password...');
+      const bcrypt = await import('bcryptjs');
+      passwordHash = await bcrypt.hash(profileData.tempPassword, 10);
+      console.log('✅ Password hashed successfully');
     }
 
     if (existingUser) {
@@ -1653,26 +1832,13 @@ export async function completePartnerProfile(request, env) {
       partnerId = existingUser.id;
 
       try {
-        // Build UPDATE query - only update password_hash if we have a hashed password
-        const updateQuery = hashedPassword 
-          ? `UPDATE providers SET 
-              email = ?, password_hash = ?, 
-              first_name = ?, last_name = ?, business_name = ?, description = ?, experience_years = ?,
-              address = ?, city = ?, state = ?, area = ?, pincode = ?,
-              date_of_birth = ?, gender = ?, profile_image_url = ?,
-              languages = ?, service_categories = ?, specific_services = ?, age_groups = ?,
-              account_holder_name = ?, bank_name = ?, account_number = ?, ifsc_code = ?, account_type = ?, upi_id = ?,
-              aadhaar_number = ?, pan_number = ?, gst_number = ?,
-              is_aadhaar_verified = ?, is_pan_verified = ?, is_gst_verified = ?,
-              last_completed_step = ?,
-              kyc_status = ?, 
-              updated_at = ?
-            WHERE id = ?`
-          : `UPDATE providers SET 
+        // Build UPDATE query - match actual database schema
+        const updateQuery = `UPDATE providers SET 
               email = ?, 
-              first_name = ?, last_name = ?, business_name = ?, description = ?, experience_years = ?,
+              password_hash = ?,
+              name = ?, business_name = ?, bio = ?, experience_years = ?,
               address = ?, city = ?, state = ?, area = ?, pincode = ?,
-              date_of_birth = ?, gender = ?, profile_image_url = ?,
+              date_of_birth = ?, gender = ?, profile_picture = ?,
               languages = ?, service_categories = ?, specific_services = ?, age_groups = ?,
               account_holder_name = ?, bank_name = ?, account_number = ?, ifsc_code = ?, account_type = ?, upi_id = ?,
               aadhaar_number = ?, pan_number = ?, gst_number = ?,
@@ -1682,49 +1848,11 @@ export async function completePartnerProfile(request, env) {
               updated_at = ?
             WHERE id = ?`;
         
-        const bindParams = hashedPassword
-          ? [
+        const bindParams = [
               profileData.email,
-              hashedPassword,
-              firstName,
-              lastName,
+              passwordHash,
               profileData.fullName,
-              profileData.description,
-              parseInt(profileData.experience?.split('-')[0]) || 0,
-              profileData.address,
-              profileData.city,
-              profileData.state,
-              profileData.area || null,
-              profileData.pincode,
-              profileData.dateOfBirth || null,
-              profileData.gender || null,
-              profileData.profileImageUrl || null,
-              profileData.languages?.join(',') || null,
-              profileData.primaryCategories?.join(',') || null,
-              profileData.specificServices?.join(',') || null,
-              profileData.ageGroups?.join(',') || null,
-              profileData.accountHolder || null,
-              profileData.bankName || null,
-              profileData.accountNumber || null,
-              profileData.ifscCode || null,
-              profileData.accountType || null,
-              profileData.upiId || null,
-              profileData.aadhaarNumber || null,
-              profileData.panNumber || null,
-              profileData.gstNumber || null,
-              profileData.isAadhaarVerified ? 1 : 0,
-              profileData.isPanVerified ? 1 : 0,
-              profileData.isGstVerified ? 1 : 0,
-              lastCompletedStep,
-              kycStatus,
-              new Date().toISOString(),
-              partnerId
-            ]
-          : [
-              profileData.email,
-              firstName,
-              lastName,
-              profileData.fullName,
+              profileData.businessName || profileData.fullName,
               profileData.description,
               parseInt(profileData.experience?.split('-')[0]) || 0,
               profileData.address,
@@ -1772,24 +1900,22 @@ export async function completePartnerProfile(request, env) {
       try {
         await env.KUDDL_DB.prepare(`
           INSERT INTO providers (
-            id, phone, email, password_hash, 
-            first_name, last_name, business_name, description, experience_years,
+            id, phone, email, 
+            name, business_name, bio, experience_years,
             address, city, state, area, pincode,
-            date_of_birth, gender, profile_image_url,
+            date_of_birth, gender, profile_picture,
             languages, service_categories, specific_services, age_groups,
             account_holder_name, bank_name, account_number, ifsc_code, account_type, upi_id,
             aadhaar_number, pan_number, gst_number,
             is_aadhaar_verified, is_pan_verified, is_gst_verified,
             kyc_status, is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           partnerId,
           phoneNumber,
           profileData.email,
-          hashedPassword,
-          firstName,
-          lastName,
           profileData.fullName,
+          profileData.businessName || profileData.fullName,
           profileData.description,
           parseInt(profileData.experience?.split('-')[0]) || 0,
           profileData.address,
@@ -1831,7 +1957,7 @@ export async function completePartnerProfile(request, env) {
 
     // Verify the data was saved
     const verifyData = await env.KUDDL_DB.prepare(`
-      SELECT id, email, first_name, last_name, phone, city, state, 
+      SELECT id, email, name, phone, city, state, 
              service_categories, account_holder_name, date_of_birth, gender
       FROM providers WHERE id = ?
     `).bind(partnerId).first();
@@ -1839,7 +1965,7 @@ export async function completePartnerProfile(request, env) {
     console.log('🔍 Database verification:', {
       id: verifyData?.id,
       email: verifyData?.email,
-      name: `${verifyData?.first_name} ${verifyData?.last_name}`,
+      name: verifyData?.name,
       phone: verifyData?.phone,
       location: `${verifyData?.city}, ${verifyData?.state}`,
       categories: verifyData?.service_categories,
@@ -2846,7 +2972,7 @@ export async function deletePartner(request, env) {
 
     // Delete document verifications
     await env.KUDDL_DB.prepare(`
-      DELETE FROM document_verifications WHERE partner_id = ?
+      DELETE FROM document_verifications WHERE provider_id = ?
     `).bind(partnerId).run();
 
     // Delete services
@@ -3055,6 +3181,96 @@ export async function getAdminRevenue(request, env) {
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
       message: 'Failed to fetch revenue data'
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+}
+
+// Get all partners/providers
+export async function getAllPartners(request, env) {
+  try {
+    console.log('📋 Fetching all partners...');
+
+    // Use SELECT * to avoid column-not-found errors across different schema versions
+    const providers = await env.KUDDL_DB.prepare(`
+      SELECT * FROM providers ORDER BY created_at DESC
+    `).all();
+
+    const partnersList = providers.results || [];
+
+    // For each partner, fetch their services and camps counts
+    const enrichedPartners = await Promise.all(partnersList.map(async (provider) => {
+      let servicesCount = 0;
+      let campsCount = 0;
+      let services = [];
+      let camps = [];
+
+      try {
+        const servicesResult = await env.KUDDL_DB.prepare(
+          `SELECT id, name, price, status FROM services WHERE provider_id = ? LIMIT 10`
+        ).bind(provider.id).all();
+        services = servicesResult.results || [];
+        servicesCount = services.length;
+      } catch (e) {
+        console.warn('Could not fetch services for provider:', provider.id);
+      }
+
+      try {
+        // The camps table uses `title`, not `name` — alias it so the frontend
+        // (which expects { id, name, price, status }) keeps working.
+        const campsResult = await env.KUDDL_DB.prepare(
+          `SELECT id, title AS name, price, status FROM camps WHERE provider_id = ? LIMIT 10`
+        ).bind(provider.id).all();
+        camps = campsResult.results || [];
+        campsCount = camps.length;
+      } catch (e) {
+        console.warn('Could not fetch camps for provider:', provider.id, e?.message);
+      }
+
+      return {
+        id: provider.id,
+        name: provider.name || null,
+        email: provider.email || null,
+        phone: provider.phone || null,
+        business_name: provider.business_name || null,
+        address: provider.address || null,
+        city: provider.city || null,
+        state: provider.state || null,
+        pincode: provider.pincode || null,
+        kyc_status: provider.kyc_status || 'pending',
+        is_active: provider.is_active || 0,
+        profile_image_url: provider.profile_image_url || provider.profile_picture || null,
+        experience_years: provider.experience_years || 0,
+        created_at: provider.created_at || null,
+        updated_at: provider.updated_at || null,
+        // Service profile fields needed for add-service / add-camp forms
+        serviceable_pincodes: provider.serviceable_pincodes || null,
+        service_categories: provider.service_categories || null,
+        age_groups: provider.age_groups || null,
+        specific_services: provider.specific_services || null,
+        languages: provider.languages || null,
+        services_count: servicesCount,
+        camps_count: campsCount,
+        services,
+        camps
+      };
+    }));
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      partners: enrichedPartners,
+      count: enrichedPartners.length
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    }));
+
+  } catch (error) {
+    console.error('❌ Get all partners error:', error.message || error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: `Failed to fetch partners: ${error.message || 'Unknown error'}`
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }

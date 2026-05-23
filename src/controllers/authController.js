@@ -165,32 +165,29 @@ export async function login(request, env) {
       console.log('❌ No user found with email:', email);
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'Invalid email or password'
+        message: 'Invalid email or password. If you registered via phone, please use OTP login.'
       }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
       }));
     }
 
-    // Check if password hash exists
+    // Check if partner has a password_hash set
     if (!user.password_hash) {
-      console.log('❌ User found but no password hash set');
+      console.log('❌ Partner has no password set, must use OTP');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'Invalid email or password'
+        message: 'No password set for this account. Please use OTP login or set a password first.'
       }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
       }));
     }
 
-    // Verify user password
-    console.log('🔐 Comparing password with hash...');
+    // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
-    console.log('Password validation result:', isValidPassword);
-
     if (!isValidPassword) {
-      console.log('❌ Password validation failed');
+      console.log('❌ Invalid password for partner:', email);
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Invalid email or password'
@@ -200,39 +197,43 @@ export async function login(request, env) {
       }));
     }
 
-    // Generate JWT tokens for provider
+    console.log('✅ Partner password verified successfully');
+
+    // Generate JWT tokens for partner
+    const jwtSecret = env.JWT_SECRET || '';
+    
     const accessToken = await jwt.sign({
       id: user.id,
       email: user.email,
+      phone: user.phone,
       role: 'partner',
       type: 'access',
       exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60) // 30 days
-    }, env.JWT_SECRET);
+    }, jwtSecret);
 
     const refreshToken = await jwt.sign({
       id: user.id,
       type: 'refresh',
       exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
-    }, env.JWT_SECRET);
+    }, jwtSecret);
 
-    // Return provider data with tokens
+    // Calculate profile completion
+    const hasEssentialFields = user.name && user.email && user.service_categories;
+    
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       message: 'Login successful',
       user: {
         id: user.id,
         email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
         phone: user.phone,
-        business_name: user.business_name,
-        kyc_status: user.kyc_status,
+        name: user.name || user.business_name || 'Partner',
         role: 'partner',
-        name: `${user.first_name} ${user.last_name}`
+        kyc_status: user.kyc_status || 'pending',
+        profileComplete: !!hasEssentialFields
       },
       token: accessToken,
-      refreshToken,
-      isFirstLogin: false
+      refreshToken
     }), {
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -348,7 +349,7 @@ export async function verify(request, env) {
 
       if (user) {
         userRole = 'admin';
-        userName = `${user.first_name} ${user.last_name}`;
+        userName = user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Admin';
       }
     } else if (decoded.role === 'partner') {
       // Check providers table for partner tokens
@@ -366,10 +367,10 @@ export async function verify(request, env) {
 
       if (user) {
         userRole = 'partner';
-        userName = `${user.first_name} ${user.last_name}`;
+        userName = user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Partner';
 
         // Calculate profile completion for partners based on essential fields
-        const hasEssentialFields = user.first_name && 
+        const hasEssentialFields = user.name && 
                                   user.email && 
                                   user.service_categories && 
                                   user.account_holder_name && 
@@ -471,7 +472,7 @@ export async function refresh(request, env) {
 
     if (user) {
       userRole = 'admin';
-      userName = user.full_name;
+      userName = user.name || user.full_name || 'Admin';
     } else {
       // Try providers table
       user = await env.KUDDL_DB.prepare(
@@ -480,7 +481,7 @@ export async function refresh(request, env) {
 
       if (user) {
         userRole = 'partner';
-        userName = `${user.first_name} ${user.last_name}`;
+        userName = user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Partner';
       }
     }
 

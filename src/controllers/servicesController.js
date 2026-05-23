@@ -7,6 +7,7 @@ import jwt from '@tsndr/cloudflare-worker-jwt';
 import bcrypt from 'bcryptjs';
 import { addCorsHeaders } from '../utils/cors.js';
 import { getPublicR2Url } from '../utils/r2Utils.js';
+import { insertBatch } from './batchesController.js';
 
 // Get service categories endpoint
 export async function getServiceCategories(request, env) {
@@ -381,23 +382,39 @@ export async function createService(request, env) {
       }));
     }
     
+    // Decode token to get provider ID
+    const decoded = jwt.decode(token);
+    const jwtRole = decoded?.payload?.role;
+    const jwtProviderId = decoded?.payload?.id || decoded?.payload?.userId;
+    
     const serviceData = await request.json();
+
+    // Admin can create a service on behalf of any partner by supplying provider_id in body
+    const providerId = (jwtRole === 'admin' && serviceData.provider_id) ? serviceData.provider_id : jwtProviderId;
+    
+    if (!providerId) {
+      console.error('❌ No provider ID found in JWT token');
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid token. Please logout and login again.'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    
+    console.log('✅ Provider ID resolved:', providerId, jwtRole === 'admin' ? '(admin override)' : '(from JWT)');
     console.log('📦 Received service data:', JSON.stringify(serviceData, null, 2));
     console.log('🖼️ Image URLs received:', serviceData.image_urls);
     console.log('🖼️ Primary image URL received:', serviceData.primary_image_url);
     
     const {
-      name, description, category_id, subcategory_id, price_type, price,
+      name, description, category_id, subcategory_id, subcategory_label, price_type, price,
       duration_minutes, features, special_requirements, cancellation_policy,
       available_pincodes, age_group_min, age_group_max, max_children,
-      provider_id // Extract provider_id from request body (from localStorage)
+      status: requestStatus // Extract status from request (draft, submitted, active)
     } = serviceData;
     
     console.log('🔍 DEBUGGING - Extracted category_id:', category_id);
     console.log('🔍 DEBUGGING - Raw serviceData.category_id:', serviceData.category_id);
     console.log('🔍 DEBUGGING - All serviceData keys:', Object.keys(serviceData));
-    
-    console.log('📋 Provider ID from request body:', provider_id);
   
     if (!name || !category_id || !price_type || !price) {
 
@@ -433,18 +450,6 @@ export async function createService(request, env) {
 
     console.log('✅ All required fields validated successfully');
     
-    // Use provider_id from request body (sent from frontend localStorage)
-    const providerId = provider_id;
-    
-
-    if (!providerId) {
-      console.error('❌ No provider ID provided in request');
-      return addCorsHeaders(new Response(JSON.stringify({
-        success: false,
-        message: 'Provider ID is required. Please logout and login again.'
-      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
-    }
-    
 
     // Verify provider exists and is active
     console.log('🔍 Verifying provider record:', providerId);
@@ -475,11 +480,13 @@ export async function createService(request, env) {
     
     console.log('✅ Provider verified:', provider.id);
     
-    // Verify category exists
+    // Verify category exists — accept id, slug, or name (clients may send any of these)
     console.log('🔍 Verifying category:', category_id);
-    const categoryStmt = env.KUDDL_DB.prepare('SELECT id FROM categories WHERE id = ?');
-    let category = await categoryStmt.bind(category_id).first();
-    
+    const categoryStmt = env.KUDDL_DB.prepare(
+      'SELECT id FROM categories WHERE id = ? OR slug = ? OR LOWER(name) = LOWER(?)'
+    );
+    let category = await categoryStmt.bind(category_id, category_id, category_id).first();
+
     if (!category) {
       console.log('❌ Category not found:', category_id);
       return addCorsHeaders(new Response(JSON.stringify({
@@ -490,8 +497,29 @@ export async function createService(request, env) {
         headers: { 'Content-Type': 'application/json' }
       }));
     }
-    
-    console.log('✅ Category verified:', category.id);
+
+    // Use the canonical category id for the insert (e.g. "cat_adventure")
+    const resolvedCategoryId = category.id;
+    console.log('✅ Category verified:', resolvedCategoryId);
+
+    // Resolve subcategory against the subcategories table — match by id, slug, or
+    // name. The wizard may send a synthetic id, so also try the human-readable
+    // subcategory_label as a name match.
+    let resolvedSubcategoryId = null;
+    const subLookup = env.KUDDL_DB.prepare(
+      'SELECT id FROM subcategories WHERE id = ? OR slug = ? OR LOWER(name) = LOWER(?)'
+    );
+    if (subcategory_id) {
+      const sub = await subLookup.bind(subcategory_id, subcategory_id, subcategory_id).first();
+      if (sub) resolvedSubcategoryId = sub.id;
+    }
+    if (!resolvedSubcategoryId && subcategory_label) {
+      const sub = await subLookup.bind(subcategory_label, subcategory_label, subcategory_label).first();
+      if (sub) resolvedSubcategoryId = sub.id;
+    }
+    if (!resolvedSubcategoryId) {
+      console.log('⚠️ Subcategory not resolved, storing null:', subcategory_id, subcategory_label);
+    }
     
     const serviceId = `service_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
@@ -501,28 +529,37 @@ export async function createService(request, env) {
     } = serviceData;
     
     
+    // Generate slug from service name
+    const serviceName = name || 'Untitled Service';
+    const slug = serviceName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      + '-' + Date.now();
+    
     // INSERT with available columns (match actual database schema)
     const insertStmt = env.KUDDL_DB.prepare(`
       INSERT INTO services (
-        id, provider_id, category_id, subcategory_id, name, description,
+        id, provider_id, category_id, subcategory_id, name, slug, description,
         price_type, price, duration_minutes, special_requirements, cancellation_policy,
-        features, available_pincodes, images,
+        features, available_pincodes, image_urls, primary_image_url,
         status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Prepare image URLs for database
     const imageUrlsJson = JSON.stringify(Array.isArray(image_urls) ? image_urls : []);
     const primaryImageUrl = primary_image_url || null;
-    
+
 
     // Ensure all values are properly defined with strict validation
     const bindValues = [
       serviceId || `service_${Date.now()}`,
       providerId, // Use the provider ID from JWT token (providers.id)
-      category_id,
-      subcategory_id || null,
-      name || 'Untitled Service',
+      resolvedCategoryId,
+      resolvedSubcategoryId,
+      serviceName,
+      slug,
       description || 'No description provided',
       price_type || 'hourly',
       parseFloat(price) || 0,
@@ -531,8 +568,9 @@ export async function createService(request, env) {
       cancellation_policy || '',
       JSON.stringify(features || {}),
       JSON.stringify(Array.isArray(available_pincodes) ? available_pincodes : []),
-      imageUrlsJson, // Store in 'images' column
-      'active',
+      imageUrlsJson,
+      primaryImageUrl,
+      requestStatus || 'active', // Use status from request or default to 'active'
       new Date().toISOString(),
       new Date().toISOString()
     ];
@@ -554,10 +592,41 @@ export async function createService(request, env) {
       }));
     }
 
+    // Camp Architecture v2.0 — create Batch #1 from the wizard payload.
+    let batchId = null;
+    try {
+      const f = (typeof features === 'object' && features) || {};
+      const sched = Array.isArray(f.schedules) ? f.schedules[0] : (f.schedule || {});
+      batchId = await insertBatch(env, {
+        parent_type: 'service',
+        parent_id: serviceId,
+        provider_id: providerId,
+        batch_name: f.variant_name || f.batch_name || serviceName,
+        mode: f.mode || 'offline',
+        age_min: f.age_min ?? age_group_min ?? null,
+        age_max: f.age_max ?? age_group_max ?? null,
+        pincodes: Array.isArray(available_pincodes) ? available_pincodes : [],
+        total_seats: f.cohort_capacity ?? f.per_session_capacity ?? null,
+        per_session_override: f.cohort_capacity ? (f.per_session_capacity ?? null) : null,
+        cancellation_policy: cancellation_policy || 'flexible',
+        booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
+        instructor: f.instructor || null,
+        what_to_bring: f.what_to_bring || null,
+        price: parseFloat(price) || 0,
+        price_type: price_type || null,
+        schedule: sched || {},
+        features: f,
+        status: 'live',
+      });
+    } catch (batchError) {
+      console.error('⚠️ Service created but Batch #1 insert failed:', batchError);
+    }
+
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       message: 'Service created successfully',
-      serviceId
+      serviceId,
+      batchId
     }), {
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -866,9 +935,9 @@ export async function getPublicServices(request, env) {
         }));
       }
 
-      // Query for all services (lenient filtering for now)
+      // Query for all services. Only admin-verified services are exposed publicly.
       let query = `
-        SELECT 
+        SELECT
           s.id,
           s.name,
           s.description,
@@ -891,18 +960,22 @@ export async function getPublicServices(request, env) {
           p.profile_picture as profile_image_url,
           p.city,
           p.state,
+          p.address,
+          p.pincode,
+          p.latitude,
+          p.longitude,
           p.experience_years
         FROM services s
         LEFT JOIN categories c ON s.category_id = c.id
         LEFT JOIN providers p ON s.provider_id = p.id
-        WHERE 1=1
+        WHERE COALESCE(s.is_verified, 0) = 1
       `;
       
       const params = [];
 
       if (pincode) {
-        // Only return services that are actually available in the requested pincode
-        query += ` AND s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?`;
+        // Include services available in the pincode OR services with no pincode restriction (available everywhere)
+        query += ` AND (s.available_pincodes IS NULL OR s.available_pincodes = '[]' OR s.available_pincodes LIKE ?)`;
         params.push(`%${pincode}%`);
       }
 
@@ -1000,6 +1073,10 @@ export async function getPublicServices(request, env) {
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
             city: service.city || 'Available',
             state: service.state || 'Nationwide',
+            address: service.address,
+            pincode: service.pincode,
+            latitude: service.latitude,
+            longitude: service.longitude,
             average_rating: 4.5, // Default rating since column doesn't exist
             experience_years: service.experience_years || 0,
             business_name: service.business_name || 'Service Provider',
@@ -1353,10 +1430,9 @@ export async function getPublicServiceById(request, env) {
         s.created_at,
         s.provider_id,
         p.id as provider_db_id,
+        p.name as provider_name,
         p.business_name,
-        p.first_name,
-        p.last_name,
-        p.profile_image_url,
+        p.profile_picture as profile_image_url,
         p.city,
         p.state,
         p.average_rating,
@@ -1412,9 +1488,7 @@ export async function getPublicServiceById(request, env) {
       provider: {
         id: service.provider_id,
         businessName: service.business_name,
-        name: `${service.first_name} ${service.last_name}`,
-        first_name: service.first_name,
-        last_name: service.last_name,
+        name: service.provider_name || service.business_name,
         profileImage: service.profile_image_url,
         profile_image_url: service.profile_image_url,
         location: `${service.city}, ${service.state}`,
@@ -1443,5 +1517,303 @@ export async function getPublicServiceById(request, env) {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     }));
+  }
+}
+
+// Get all services for admin (with provider info)
+export async function getAllServicesForAdmin(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const userRole = decoded?.payload?.role;
+
+    if (userRole !== 'admin') {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Admin access required'
+      }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const services = await env.KUDDL_DB.prepare(`
+      SELECT 
+        s.*,
+        p.name as provider_name,
+        p.email as provider_email,
+        p.phone as provider_phone
+      FROM services s
+      LEFT JOIN providers p ON s.provider_id = p.id
+      ORDER BY s.created_at DESC
+    `).all();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      data: services.results || []
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Get all services error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to fetch services',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// Approve service (admin only)
+export async function approveService(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const userRole = decoded?.payload?.role;
+
+    if (userRole !== 'admin') {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Admin access required'
+      }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const url = new URL(request.url);
+    const serviceId = url.pathname.split('/').slice(-2)[0];
+    const adminId = decoded?.payload?.id || decoded?.payload?.partnerId || null;
+
+    await env.KUDDL_DB.prepare(
+      `UPDATE services
+         SET status = ?,
+             is_verified = 1,
+             verified_by = COALESCE(?, verified_by),
+             verified_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+    ).bind('active', adminId, serviceId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Service approved and made visible on the customer portal'
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Approve service error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to approve service',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// Reject service (admin only)
+export async function rejectService(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const userRole = decoded?.payload?.role;
+
+    if (userRole !== 'admin') {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Admin access required'
+      }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const url = new URL(request.url);
+    const serviceId = url.pathname.split('/').slice(-2)[0];
+
+    await env.KUDDL_DB.prepare(
+      `UPDATE services
+         SET status = ?,
+             is_verified = 0,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+    ).bind('rejected', serviceId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Service rejected and hidden from the customer portal'
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Reject service error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to reject service',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// Update service endpoint (for status changes and edits)
+export async function updateService(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization token required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid or expired token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const providerId = decoded?.payload?.id || decoded?.payload?.userId;
+    const isAdmin = decoded?.payload?.role === 'admin';
+
+    const url = new URL(request.url);
+    const serviceId = url.pathname.split('/').pop();
+    const updateData = await request.json();
+
+    const service = await env.KUDDL_DB.prepare(
+      'SELECT id, provider_id FROM services WHERE id = ?'
+    ).bind(serviceId).first();
+
+    if (!service) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Service not found'
+      }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Admins can edit any service; partners can edit only their own.
+    if (!isAdmin && service.provider_id !== providerId) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Unauthorized'
+      }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Whitelisted editable columns. Previously this endpoint only set `status`,
+    // which silently dropped every other field the form sent — that's why edits
+    // appeared to "do nothing" in the admin portal.
+    const editableFields = [
+      'name', 'description', 'category_id', 'subcategory_id',
+      'price', 'price_type', 'duration_minutes',
+      'features', 'available_pincodes',
+      'image_urls', 'primary_image_url',
+      'cancellation_policy', 'service_type_id',
+      'age_group_min', 'age_group_max', 'max_children',
+      'special_requirements', 'status',
+    ];
+    // Resolve subcategory by id / slug / name (or the human-readable label)
+    // so a synthetic id from the wizard still maps to a real subcategory row.
+    if (updateData.subcategory_id !== undefined || updateData.subcategory_label) {
+      const subLookup = env.KUDDL_DB.prepare(
+        'SELECT id FROM subcategories WHERE id = ? OR slug = ? OR LOWER(name) = LOWER(?)'
+      );
+      let resolved = null;
+      if (updateData.subcategory_id) {
+        const s = await subLookup
+          .bind(updateData.subcategory_id, updateData.subcategory_id, updateData.subcategory_id)
+          .first();
+        if (s) resolved = s.id;
+      }
+      if (!resolved && updateData.subcategory_label) {
+        const s = await subLookup
+          .bind(updateData.subcategory_label, updateData.subcategory_label, updateData.subcategory_label)
+          .first();
+        if (s) resolved = s.id;
+      }
+      updateData.subcategory_id = resolved;
+    }
+
+    const updates = [];
+    const values = [];
+    for (const field of editableFields) {
+      if (updateData[field] === undefined) continue;
+      let value = updateData[field];
+      if (field === 'features' || field === 'image_urls' || field === 'available_pincodes') {
+        value = JSON.stringify(value ?? (Array.isArray(updateData[field]) ? [] : {}));
+      }
+      updates.push(`${field} = ?`);
+      values.push(value);
+    }
+
+    if (updates.length === 0) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'No editable fields provided',
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(serviceId);
+
+    await env.KUDDL_DB.prepare(
+      `UPDATE services SET ${updates.join(', ')} WHERE id = ?`
+    ).bind(...values).run();
+
+    const updatedService = await env.KUDDL_DB.prepare(
+      'SELECT * FROM services WHERE id = ?'
+    ).bind(serviceId).first();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Service updated successfully',
+      data: updatedService
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Update service error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to update service',
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }

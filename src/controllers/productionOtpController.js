@@ -74,15 +74,16 @@ export async function sendProductionOTP(request, env) {
       }));
     }
 
-    // Format phone number to E.164 format
-    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
+    // Format phone number to E.164 format - remove any existing +91 or 91 prefix and add +91
+    const cleanPhone = phoneNumber.replace(/^\+?91/, '');
+    const formattedPhone = `+91${cleanPhone}`;
 
     // Check if phone number already exists in database (only for signup)
     if (isSignup) {
       try {
         // Check parents table for customer signups
         const existingParent = await env.KUDDL_DB.prepare(
-          'SELECT id, full_name FROM parents WHERE phone = ?'
+          'SELECT id, fullname FROM parents WHERE phone = ?'
         ).bind(formattedPhone).first();
 
         if (existingParent) {
@@ -238,8 +239,11 @@ export async function verifyProductionOTP(request, env) {
       }));
     }
 
-    // Format phone number to E.164 format
-    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
+    // Format phone number to E.164 format - remove any existing +91 or 91 prefix and add +91
+    const cleanPhone = phoneNumber.replace(/^\+?91/, '');
+    const formattedPhone = `+91${cleanPhone}`;
+
+    console.log('Formatted phone for customer verification:', formattedPhone);
 
     // Get OTP record from database
     const record = await env.KUDDL_DB.prepare(
@@ -310,6 +314,7 @@ export async function verifyProductionOTP(request, env) {
 
     // Create parent record in database immediately after OTP verification
     let parentId;
+    let parentRecord = null;
     try {
       // First check if parents table exists
       console.log('🔍 Checking if parents table exists...');
@@ -339,11 +344,12 @@ export async function verifyProductionOTP(request, env) {
 
       // Check if parent already exists
       const existingParent = await env.KUDDL_DB.prepare(
-        'SELECT id FROM parents WHERE phone = ?'
+        'SELECT * FROM parents WHERE phone = ?'
       ).bind(formattedPhone).first();
 
       if (existingParent) {
         parentId = existingParent.id;
+        parentRecord = existingParent;
         console.log('✅ Using existing parent ID:', parentId);
       } else {
         // Create new parent record
@@ -351,7 +357,7 @@ export async function verifyProductionOTP(request, env) {
         const now = new Date().toISOString();
 
         await env.KUDDL_DB.prepare(`
-          INSERT INTO parents (id, phone, full_name, created_at, updated_at)
+          INSERT INTO parents (id, phone, fullname, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?)
         `).bind(parentId, formattedPhone, 'User', now, now).run();
 
@@ -371,12 +377,24 @@ export async function verifyProductionOTP(request, env) {
     }
 
     // Generate JWT token (properly signed with jwt.sign so jwt.verify works)
+    const jwtSecret = env.JWT_SECRET || '';
+    if (!jwtSecret || typeof jwtSecret !== 'string') {
+      console.error('JWT_SECRET is not configured properly:', typeof jwtSecret);
+      throw new Error('JWT_SECRET configuration error');
+    }
+    
     const token = await jwt.sign({
       id: parentId,
       phone: formattedPhone,
       role: 'customer',
       exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60) // 30 days
-    }, env.JWT_SECRET);
+    }, jwtSecret);
+
+    // Extract real name from stored parent record (handles both 'fullname' and 'full_name' columns)
+    const storedFullName = parentRecord?.full_name || parentRecord?.fullname || '';
+    const nameParts = storedFullName.trim().split(' ');
+    const firstName = nameParts[0] && nameParts[0] !== 'User' ? nameParts[0] : '';
+    const lastName = nameParts.slice(1).join(' ') || '';
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -385,9 +403,10 @@ export async function verifyProductionOTP(request, env) {
       user: {
         id: parentId,
         phone: formattedPhone,
-        first_name: 'User',
-        last_name: '',
-        email: '',
+        first_name: firstName,
+        last_name: lastName,
+        full_name: storedFullName && storedFullName !== 'User' ? storedFullName : '',
+        email: parentRecord?.email || '',
         role: 'customer'
       }
     }), {
@@ -549,10 +568,9 @@ export async function verifyPartnerProductionOTP(request, env) {
       }));
     }
 
-    // Normalize phone number
-    const formattedPhone = phoneNumber.startsWith('+91')
-      ? phoneNumber
-      : `+91${phoneNumber.replace(/^\+?91?/, '')}`;
+    // Format phone number to E.164 format - remove any existing +91 or 91 prefix and add +91
+    const cleanPhone = phoneNumber.replace(/^\+?91/, '');
+    const formattedPhone = `+91${cleanPhone}`;
 
     console.log('Formatted phone for partner verification:', formattedPhone);
 
@@ -677,6 +695,12 @@ export async function verifyPartnerProductionOTP(request, env) {
     }
 
     // Generate JWT tokens for provider
+    const jwtSecret = env.JWT_SECRET || '';
+    if (!jwtSecret || typeof jwtSecret !== 'string') {
+      console.error('JWT_SECRET is not configured properly:', typeof jwtSecret);
+      throw new Error('JWT_SECRET configuration error');
+    }
+    
     const accessToken = await jwt.sign({
       id: providerId,
       email: providerData.email,
@@ -684,16 +708,16 @@ export async function verifyPartnerProductionOTP(request, env) {
       role: 'partner',
       type: 'access',
       exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60) // 30 days
-    }, env.JWT_SECRET);
+    }, jwtSecret);
 
     const refreshToken = await jwt.sign({
       id: providerId,
       type: 'refresh',
       exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
-    }, env.JWT_SECRET);
+    }, jwtSecret);
 
     // Calculate profile completion for partners based on essential fields
-    const hasEssentialFields = providerData.first_name &&
+    const hasEssentialFields = providerData.name &&
       providerData.email &&
       providerData.service_categories &&
       providerData.account_holder_name &&
@@ -705,7 +729,7 @@ export async function verifyPartnerProductionOTP(request, env) {
     const user = {
       ...userWithoutPassword,
       role: 'partner',
-      name: `${providerData.first_name || ''} ${providerData.last_name || ''}`.trim(),
+      name: providerData.name || providerData.business_name || 'Partner',
       kyc_status: providerData.kyc_status || 'pending',
       profileComplete: !!hasEssentialFields,
       profileCompletionPercentage: hasEssentialFields ? 100 : 50,

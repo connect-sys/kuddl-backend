@@ -22,10 +22,10 @@ export async function getProviders(request, env) {
 
     let query = `
       SELECT 
-        p.id, p.business_name, p.description, p.experience_years,
+        p.id, p.name, p.business_name, p.description, p.experience_years,
         p.languages, p.average_rating, p.total_bookings,
         p.total_reviews, p.is_featured, p.response_time_minutes,
-        p.first_name, p.last_name, p.profile_image_url, p.city, p.state,
+        p.profile_picture as profile_image_url, p.city, p.state,
         GROUP_CONCAT(s.name) as services,
         MIN(s.price) as min_price,
         MAX(s.price) as max_price
@@ -132,7 +132,7 @@ export async function getProviderById(request, env) {
     const provider = await env.KUDDL_DB.prepare(`
       SELECT 
         p.*, 
-        p.first_name, p.last_name, p.email, p.phone, p.profile_image_url,
+        p.name, p.email, p.phone, p.profile_picture as profile_image_url,
         p.city, p.state, p.created_at as user_created_at
       FROM providers p
       WHERE p.id = ? AND p.is_active = 1
@@ -183,7 +183,7 @@ export async function getProviderById(request, env) {
       data: {
         provider: {
           ...provider,
-          name: `${provider.first_name} ${provider.last_name}`,
+          name: provider.name || provider.business_name,
           languages: provider.languages ? JSON.parse(provider.languages) : [],
           service_area: provider.service_area ? JSON.parse(provider.service_area) : [],
           verification_documents: provider.verification_documents ? JSON.parse(provider.verification_documents) : []

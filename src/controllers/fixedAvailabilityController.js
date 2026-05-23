@@ -42,26 +42,35 @@ export async function getProviderAvailability(request, env) {
 
     console.log(`🔍 Getting availability for provider ${providerId} on ${date} (day ${dayOfWeek})`);
 
-    // Try to get from partner_working_hours table with actual schema
+    // Try to get from partner_working_hours table (working_hours_json column)
     try {
-      const workingHours = await env.KUDDL_DB.prepare(`
-        SELECT * FROM partner_working_hours WHERE provider_id = ?
+      const workingHoursRecord = await env.KUDDL_DB.prepare(`
+        SELECT working_hours_json FROM partner_working_hours WHERE provider_id = ?
       `).bind(providerId).first();
 
-      if (workingHours) {
-        console.log('✅ Found working hours in partner_working_hours table:', workingHours);
-        
-        // Check if we have working_hours_from and working_hours_to columns
-        if (workingHours.working_hours_from && workingHours.working_hours_to) {
-          console.log(`🕐 Using working_hours_from: ${workingHours.working_hours_from} to working_hours_to: ${workingHours.working_hours_to}`);
-          timeSlots = generateTimeSlots(workingHours.working_hours_from, workingHours.working_hours_to);
-          console.log(`🕐 Generated ${timeSlots.length} time slots`);
-        }
-        // Fallback to other possible column names
-        else if (workingHours.start_time && workingHours.end_time) {
-          console.log(`🕐 Using start_time: ${workingHours.start_time} to end_time: ${workingHours.end_time}`);
-          timeSlots = generateTimeSlots(workingHours.start_time, workingHours.end_time);
-          console.log(`🕐 Generated ${timeSlots.length} time slots`);
+      if (workingHoursRecord && workingHoursRecord.working_hours_json) {
+        console.log('✅ Found working_hours_json in partner_working_hours table');
+        try {
+          const workingHoursArray = JSON.parse(workingHoursRecord.working_hours_json);
+          const todayWorkingHours = workingHoursArray.find(
+            wh => wh.dayOfWeek === dayOfWeek && wh.isAvailable
+          );
+
+          if (todayWorkingHours) {
+            console.log('✅ Found hours for day', dayOfWeek, ':', todayWorkingHours);
+            if (todayWorkingHours.breakStartTime && todayWorkingHours.breakEndTime) {
+              const morningSlots = generateTimeSlots(todayWorkingHours.startTime, todayWorkingHours.breakStartTime);
+              const afternoonSlots = generateTimeSlots(todayWorkingHours.breakEndTime, todayWorkingHours.endTime);
+              timeSlots = [...morningSlots, ...afternoonSlots];
+            } else {
+              timeSlots = generateTimeSlots(todayWorkingHours.startTime, todayWorkingHours.endTime);
+            }
+            console.log(`🕐 Generated ${timeSlots.length} slots from working_hours_json`);
+          } else {
+            console.log(`❌ Provider not available on day ${dayOfWeek}`);
+          }
+        } catch (parseError) {
+          console.error('❌ Error parsing working_hours_json:', parseError);
         }
       } else {
         console.log('❌ No working hours found in partner_working_hours table');

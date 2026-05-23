@@ -32,7 +32,7 @@ export async function completeVerification(request, env) {
 
       // Check profile completeness using the same field list as profile completion calculation
       const requiredFields = [
-        'first_name', 'last_name', 'email', 'phone', 'gender', 'date_of_birth',
+        'name', 'email', 'phone', 'gender', 'date_of_birth',
         'pincode', 'address', 'city', 'state', 'area', 'service_categories',
         'specific_services', 'age_groups', 'experience_years', 'languages',
         'description', 'qualifications', 'serviceable_pincodes',

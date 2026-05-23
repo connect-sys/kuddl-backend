@@ -61,30 +61,44 @@ export async function authenticateToken(request, env, ctx) {
 
     const payload = jwt.decode(token);
     const decoded = payload.payload || payload;
-    
+
     // Handle different token structures - try id, userId, or phone
     const userId = decoded.id || decoded.userId;
     const userPhone = decoded.phone;
-    
+    const tokenRole = decoded.role;
+
     console.log('🔍 Auth Debug - Token payload:', JSON.stringify(decoded, null, 2));
-    console.log('🔍 Auth Debug - Extracted userId:', userId, 'phone:', userPhone);
-    
+    console.log('🔍 Auth Debug - Extracted userId:', userId, 'phone:', userPhone, 'role:', tokenRole);
+
+    // Admin tokens don't have a matching providers row (admin lives in a separate
+    // table). Previously the providers lookup failed with "User not found or inactive"
+    // when admin tried to verify Aadhaar OTP while creating a partner on behalf of them.
+    if (tokenRole === 'admin') {
+      request.user = {
+        id: userId || 'admin',
+        email: decoded.email || null,
+        role: 'admin',
+        name: decoded.name || 'Admin',
+      };
+      return null;
+    }
+
     let user = null;
-    
+
     // Try to find user by ID first
     if (userId) {
       user = await env.KUDDL_DB.prepare(
         'SELECT * FROM providers WHERE id = ? AND is_active = 1'
       ).bind(userId).first();
     }
-    
+
     // If not found by ID and we have phone, try to find by phone
     if (!user && userPhone) {
       user = await env.KUDDL_DB.prepare(
         'SELECT * FROM providers WHERE phone = ? AND is_active = 1'
       ).bind(userPhone).first();
     }
-    
+
     if (!user) {
       return new Response(JSON.stringify({
         success: false,

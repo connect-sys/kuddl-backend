@@ -345,13 +345,12 @@ export async function updateParentProfile(request, env) {
         
         await env.KUDDL_DB.prepare(`
           INSERT INTO parents (
-            id, phone, full_name, email, address, created_at, updated_at
-            id, phone, full_name, email, address, created_at, updated_at
+            id, phone, fullname, email, address, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `).bind(
           parentId,
           normalizedPhone,
-          updateData.full_name || updateData.fullName || updateData.name || 'Parent User',
+          updateData.fullname || updateData.fullName || updateData.name || 'Parent User',
           updateData.email || '',
           updateData.address || '',
           new Date().toISOString(),
@@ -458,32 +457,9 @@ export async function addChild(request, env) {
   try {
     console.log('🚀 Starting addChild function...');
     
-    // Check children table structure
-    try {
-      const tableInfo = await env.KUDDL_DB.prepare(`PRAGMA table_info(children)`).all();
-      console.log('📋 Children table structure:', JSON.stringify(tableInfo, null, 2));
-      const columns = (tableInfo.results || tableInfo).map(col => col.name);
-      console.log('📋 Column names:', columns.join(', '));
-    } catch (tableError) {
-      console.error('❌ Error checking table structure:', tableError);
-    }
-    
-    console.log('🚀 Starting addChild function...');
-    
-    // Check children table structure
-    try {
-      const tableInfo = await env.KUDDL_DB.prepare(`PRAGMA table_info(children)`).all();
-      console.log('📋 Children table structure:', JSON.stringify(tableInfo, null, 2));
-      const columns = (tableInfo.results || tableInfo).map(col => col.name);
-      console.log('📋 Column names:', columns.join(', '));
-    } catch (tableError) {
-      console.error('❌ Error checking table structure:', tableError);
-    }
-    
     // Get authenticated parent from token
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('❌ No authorization header');
       console.log('❌ No authorization header');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
@@ -499,7 +475,6 @@ export async function addChild(request, env) {
     
     if (!isValid) {
       console.log('❌ Invalid token');
-      console.log('❌ Invalid token');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Invalid token'
@@ -513,16 +488,11 @@ export async function addChild(request, env) {
     const parentId = decoded.payload.id;
     console.log('👤 Parent ID:', parentId);
     
-    console.log('👤 Parent ID:', parentId);
-    
     const childData = await request.json();
-    console.log('📝 Received child data:', JSON.stringify(childData, null, 2));
     console.log('📝 Received child data:', JSON.stringify(childData, null, 2));
 
     // Validate required fields (age is derived from DOB if not provided)
-    const childName = childData.name || childData.full_name;
-    if (!childName) {
-    const childName = childData.name || childData.full_name;
+    const childName = childData.name || childData.fullname;
     if (!childName) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
@@ -533,38 +503,48 @@ export async function addChild(request, env) {
       }));
     }
 
-    // Keep DOB in DD-MM-YYYY format as received
+    // Keep DOB in DD-MM-YYYY format as received, or calculate from age
     let dobForDB = childData.dateOfBirth || childData.date_of_birth;
+    let ageValue = childData.age || null;
 
-    // Keep DOB in DD-MM-YYYY format as received
-    let dobForDB = childData.dateOfBirth || childData.date_of_birth;
+    // If DOB not provided but age is, calculate approximate DOB
+    if (!dobForDB && ageValue) {
+      const now = new Date();
+      const birthYear = now.getFullYear() - parseInt(ageValue);
+      // Use January 1st as default birth date when calculating from age
+      dobForDB = `01-01-${birthYear}`;
+      console.log(`📅 Calculated DOB from age ${ageValue}: ${dobForDB}`);
+    }
+
+    // Now validate that we have DOB (either provided or calculated)
+    if (!dobForDB) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Either date of birth or age is required'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    const childGender = childData.gender;
+    if (!childGender) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Gender is required'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
 
     // Calculate age from dateOfBirth if age not explicitly provided
-    // Age should be INTEGER (years only)
-    // Age should be INTEGER (years only)
-    let ageValue = childData.age || null;
     if (!ageValue && dobForDB) {
       // Parse DD-MM-YYYY format
       let dob;
       if (dobForDB.includes('-')) {
         const parts = dobForDB.split('-');
         if (parts.length === 3 && parts[0].length === 2) {
-          // DD-MM-YYYY format
-          dob = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-        } else {
-          dob = new Date(dobForDB);
-        }
-      } else {
-        dob = new Date(dobForDB);
-      }
-      
-    if (!ageValue && dobForDB) {
-      // Parse DD-MM-YYYY format
-      let dob;
-      if (dobForDB.includes('-')) {
-        const parts = dobForDB.split('-');
-        if (parts.length === 3 && parts[0].length === 2) {
-          // DD-MM-YYYY format
           dob = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
         } else {
           dob = new Date(dobForDB);
@@ -578,8 +558,7 @@ export async function addChild(request, env) {
         let years = now.getFullYear() - dob.getFullYear();
         const mDiff = now.getMonth() - dob.getMonth();
         if (mDiff < 0 || (mDiff === 0 && now.getDate() < dob.getDate())) years--;
-        ageValue = Math.max(years, 0); // INTEGER only
-        ageValue = Math.max(years, 0); // INTEGER only
+        ageValue = Math.max(years, 0);
       }
     }
 
@@ -591,94 +570,34 @@ export async function addChild(request, env) {
       childName, 
       ageValue, 
       dobForDB,
-      gender: childData.gender,
-      medicalConditions: childData.medicalConditions,
-      bedtime: childData.bedtime,
-      dietaryRestrictions: childData.dietaryRestrictions,
-      specialNeeds: childData.specialNeeds,
-      allergies: childData.allergies,
-      profile_picture: childData.profile_picture
+      gender: childData.gender
     });
     
-    try {
-      await env.KUDDL_DB.prepare(`
-        INSERT INTO children (
-          id, parent_id, name, date_of_birth, gender, 
-          medical_conditions, allergies, dietary_restrictions,
-          special_needs, bedtime, profile_picture,
-          is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        childId, 
-        parentId, 
-        childName, 
-        dobForDB || null,
-        childData.gender || null,
-        childData.medicalConditions || null,
-        childData.allergies || null,
-        childData.dietaryRestrictions || null,
-        childData.specialNeeds || null,
-        childData.bedtime || null,
-        childData.profile_picture || null,
-        1, // is_active
-        new Date().toISOString(), 
-        new Date().toISOString()
-      ).run();
-      
-      console.log('✅ Child inserted successfully');
-    } catch (dbError) {
-      console.error('❌ Database insert error:', dbError);
-      console.error('❌ Error message:', dbError.message);
-      console.error('❌ Error stack:', dbError.stack);
-      throw dbError;
-    }
-    console.log('💾 Inserting child:', { 
+    await env.KUDDL_DB.prepare(`
+      INSERT INTO children (
+        id, parent_id, name, date_of_birth, gender, 
+        medical_conditions, allergies, dietary_restrictions,
+        special_needs, bedtime, profile_picture,
+        is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
       childId, 
       parentId, 
       childName, 
-      ageValue, 
       dobForDB,
-      gender: childData.gender,
-      medicalConditions: childData.medicalConditions,
-      bedtime: childData.bedtime,
-      dietaryRestrictions: childData.dietaryRestrictions,
-      specialNeeds: childData.specialNeeds,
-      allergies: childData.allergies,
-      profile_picture: childData.profile_picture
-    });
+      childGender,
+      childData.medicalConditions || null,
+      childData.allergies || null,
+      childData.dietaryRestrictions || null,
+      childData.specialNeeds || null,
+      childData.bedtime || null,
+      childData.profile_picture || null,
+      1,
+      new Date().toISOString(), 
+      new Date().toISOString()
+    ).run();
     
-    try {
-      await env.KUDDL_DB.prepare(`
-        INSERT INTO children (
-          id, parent_id, name, date_of_birth, gender, 
-          medical_conditions, allergies, dietary_restrictions,
-          special_needs, bedtime, profile_picture,
-          is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        childId, 
-        parentId, 
-        childName, 
-        dobForDB || null,
-        childData.gender || null,
-        childData.medicalConditions || null,
-        childData.allergies || null,
-        childData.dietaryRestrictions || null,
-        childData.specialNeeds || null,
-        childData.bedtime || null,
-        childData.profile_picture || null,
-        1, // is_active
-        new Date().toISOString(), 
-        new Date().toISOString()
-      ).run();
-      
-      console.log('✅ Child inserted successfully');
-    } catch (dbError) {
-      console.error('❌ Database insert error:', dbError);
-      console.error('❌ Error message:', dbError.message);
-      console.error('❌ Error stack:', dbError.stack);
-      throw dbError;
-    }
+    console.log('✅ Child inserted successfully');
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
@@ -692,14 +611,8 @@ export async function addChild(request, env) {
     console.error('❌ Add child error:', error);
     console.error('❌ Error message:', error.message);
     console.error('❌ Error stack:', error.stack);
-    console.error('❌ Add child error:', error);
-    console.error('❌ Error message:', error.message);
-    console.error('❌ Error stack:', error.stack);
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
-      message: 'Failed to add child',
-      error: error.message,
-      stack: error.stack
       message: 'Failed to add child',
       error: error.message,
       stack: error.stack
@@ -806,6 +719,8 @@ export async function getParentBookings(request, env) {
     
     // Build query for all parent IDs
     const placeholders = allParentIds.map(() => '?').join(',');
+    
+    // Fetch regular service bookings
     const bookings = await env.KUDDL_DB.prepare(`
       SELECT 
         b.*,
@@ -814,7 +729,8 @@ export async function getParentBookings(request, env) {
         pr.name as provider_name,
         bo.otp_code,
         bo.status as otp_status,
-        bo.expires_at as otp_expires_at
+        bo.expires_at as otp_expires_at,
+        'service' as booking_type
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers pr ON b.provider_id = pr.id
@@ -823,14 +739,33 @@ export async function getParentBookings(request, env) {
       ORDER BY b.created_at DESC
     `).bind(...allParentIds).all();
     
-    console.log('🔍 Bookings query result:', bookings);
-    console.log('🔍 Number of bookings found:', bookings.results?.length || 0);
+    // Fetch camp bookings
+    const campBookings = await env.KUDDL_DB.prepare(`
+      SELECT 
+        cb.*,
+        c.title as service_name,
+        c.camp_type,
+        c.start_date as camp_start_date,
+        c.end_date as camp_end_date,
+        pr.business_name,
+        pr.name as provider_name,
+        'camp' as booking_type
+      FROM camp_bookings cb
+      LEFT JOIN camps c ON cb.camp_id = c.id
+      LEFT JOIN providers pr ON cb.provider_id = pr.id
+      WHERE cb.parent_id IN (${placeholders})
+      ORDER BY cb.created_at DESC
+    `).bind(...allParentIds).all();
+    
+    console.log('🔍 Service bookings found:', bookings.results?.length || 0);
+    console.log('🔍 Camp bookings found:', campBookings.results?.length || 0);
 
     // Get children for all parent IDs
     const children = await env.KUDDL_DB.prepare(`
       SELECT * FROM children WHERE parent_id IN (${placeholders})
     `).bind(...allParentIds).all();
 
+    // Format regular service bookings
     const formattedBookings = bookings.results?.map(booking => {
       let bookingDetails = {};
       try {
@@ -841,9 +776,10 @@ export async function getParentBookings(request, env) {
 
       return {
         id: booking.id,
+        bookingType: 'service',
         serviceId: booking.service_id,
         serviceName: booking.service_name || 'Unknown Service',
-        serviceCategory: 'General', // Default category since column doesn't exist
+        serviceCategory: 'General',
         providerId: booking.provider_id,
         providerName: booking.business_name || booking.provider_name || 'Unknown Provider',
         bookingDate: booking.booking_date,
@@ -853,6 +789,8 @@ export async function getParentBookings(request, env) {
         totalAmount: booking.total_amount,
         status: booking.status,
         paymentStatus: booking.payment_status,
+        invoiceId: booking.invoice_id,
+        invoiceQrUrl: booking.invoice_qr_url,
         otpCode: booking.otp_code,
         otpStatus: booking.otp_status,
         otpExpiresAt: booking.otp_expires_at,
@@ -862,10 +800,40 @@ export async function getParentBookings(request, env) {
       };
     }) || [];
 
+    // Format camp bookings
+    const formattedCampBookings = campBookings.results?.map(booking => {
+      return {
+        id: booking.id,
+        bookingType: 'camp',
+        campId: booking.camp_id,
+        serviceName: booking.service_name || 'Unknown Camp',
+        serviceCategory: 'Camp',
+        campType: booking.camp_type,
+        providerId: booking.provider_id,
+        providerName: booking.business_name || booking.provider_name || 'Unknown Provider',
+        bookingDate: booking.camp_start_date,
+        startDate: booking.camp_start_date,
+        endDate: booking.camp_end_date,
+        childName: booking.child_name,
+        childAge: booking.child_age,
+        totalAmount: booking.total_amount,
+        status: booking.status,
+        paymentStatus: booking.payment_status,
+        invoiceId: booking.invoice_id,
+        invoiceQrUrl: booking.invoice_qr_url,
+        createdAt: booking.created_at
+      };
+    }) || [];
+
+    // Merge and sort all bookings by creation date
+    const allBookings = [...formattedBookings, ...formattedCampBookings].sort((a, b) => {
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       data: {
-        bookings: formattedBookings,
+        bookings: allBookings,
         children: children.results || []
       }
     }), {
@@ -1054,5 +1022,137 @@ export async function getParentDashboard(request, env) {
     return addCorsHeaders(new Response(JSON.stringify({
       success: false, message: 'Failed to load dashboard: ' + error.message
     }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// Upload parent profile picture
+export async function uploadParentProfilePicture(request, env) {
+  try {
+    console.log('📸 Upload parent profile picture API called');
+    
+    // Get parent ID from token
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization required'
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.decode(token);
+    if (!decoded || !decoded.payload || !decoded.payload.id) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid token'
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    const parentId = decoded.payload.id;
+    const phone = decoded.payload.phone;
+
+    // Get parent from database
+    const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
+    const phone10 = phoneDigits.length > 10 ? phoneDigits.slice(-10) : phoneDigits;
+    
+    const parent = await env.KUDDL_DB.prepare(`
+      SELECT id FROM parents 
+      WHERE phone LIKE ? OR phone LIKE ? OR phone = ? OR id = ?
+      LIMIT 1
+    `).bind(`%${phone10}`, phone10, phone || '', parentId).first();
+
+    if (!parent) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Parent not found'
+      }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    // Parse multipart form data
+    const formData = await request.formData();
+    const file = formData.get('file');
+
+    if (!file) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'No file provided'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'File size must be less than 5MB'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Only JPEG, PNG, and WebP images are allowed'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    // Generate unique filename
+    const fileExtension = file.name.split('.').pop();
+    const fileName = `parents/${parent.id}/profile-${Date.now()}.${fileExtension}`;
+
+    // Upload to R2
+    await env.KUDDL_STORAGE.put(fileName, file.stream(), {
+      httpMetadata: {
+        contentType: file.type
+      }
+    });
+
+    // Construct public URL
+    const publicUrl = `${env.R2_PUBLIC_URL}/${fileName}`;
+
+    // Update parent record with profile picture URL
+    await env.KUDDL_DB.prepare(`
+      UPDATE parents 
+      SET profile_picture = ?, updated_at = ?
+      WHERE id = ?
+    `).bind(publicUrl, new Date().toISOString(), parent.id).run();
+
+    console.log('✅ Profile picture uploaded successfully:', publicUrl);
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      url: publicUrl,
+      message: 'Profile picture uploaded successfully'
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    }));
+
+  } catch (error) {
+    console.error('❌ Upload profile picture error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Failed to upload profile picture: ' + error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    }));
   }
 }

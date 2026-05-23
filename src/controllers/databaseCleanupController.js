@@ -445,7 +445,7 @@ export async function fixBookingsTable(request, env) {
 export async function debugBookingsData(request, env) {
   try {
     const bookings = await env.KUDDL_DB.prepare(`SELECT id, parent_id, booking_date, start_time, end_time, status FROM bookings ORDER BY created_at DESC LIMIT 20`).all();
-    const parents = await env.KUDDL_DB.prepare(`SELECT id, phone, full_name FROM parents`).all();
+    const parents = await env.KUDDL_DB.prepare(`SELECT id, phone, fullname FROM parents`).all();
     const children = await env.KUDDL_DB.prepare(`SELECT id, parent_id, name FROM children`).all();
     
     return addCorsHeaders(new Response(JSON.stringify({
