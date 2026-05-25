@@ -3790,8 +3790,8 @@ router.get('/api/public/services-all', async (request, env) => {
           p.is_active,
           p.serviceable_pincodes,
           p.pincode as provider_pincode,
-          CASE 
-            WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincode = ? OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
+          CASE
+            WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
             WHEN ? != '' AND p.city IN (SELECT city FROM pincodes WHERE pincode = ?) THEN 2
             ELSE 3
           END as location_priority
@@ -3804,8 +3804,9 @@ router.get('/api/public/services-all', async (request, env) => {
       const params = [];
       
       // Add pincode parameters for priority calculation
+      // CASE has 6 placeholders: 1 outer-WHEN + 3 inside-OR + 1 outer-WHEN + 1 subquery
       const pincodeParam = pincode || '';
-      params.push(pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam);
+      params.push(pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam);
 
       if (category) {
         query += ` AND s.category_id = ?`;
