@@ -3760,11 +3760,11 @@ router.get('/api/public/services-all', async (request, env) => {
         }));
       }
 
-      // More lenient query - show services from nearby areas if exact pincode not available
+      // Simple, safe query — no pincodes-table subquery, no columns that may not exist
       let query = `
-        SELECT 
+        SELECT
           s.id,
-          s.name,
+          s.name as service_name,
           s.description,
           s.category_id,
           c.name as category_name,
@@ -3780,41 +3780,36 @@ router.get('/api/public/services-all', async (request, env) => {
           s.created_at,
           s.status,
           s.provider_id,
-          p.id as provider_db_id,
           p.business_name,
-          p.name,
+          p.name as provider_name,
           p.profile_picture as profile_image_url,
           p.city,
           p.state,
           p.experience_years,
           p.is_active,
           p.serviceable_pincodes,
-          p.pincode as provider_pincode,
-          CASE
-            WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
-            WHEN ? != '' AND p.city IN (SELECT city FROM pincodes WHERE pincode = ?) THEN 2
-            ELSE 3
-          END as location_priority
+          p.pincode as provider_pincode
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
-        WHERE s.status = 'active' AND p.is_active = 1
+        WHERE s.status = 'active' AND COALESCE(p.is_active, 1) = 1
       `;
-      
+
       const params = [];
-      
-      // Add pincode parameters for priority calculation
-      // CASE has 6 placeholders: 1 outer-WHEN + 3 inside-OR + 1 outer-WHEN + 1 subquery
-      const pincodeParam = pincode || '';
-      params.push(pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam);
 
       if (category) {
         query += ` AND s.category_id = ?`;
         params.push(category);
       }
 
-      query += ` ORDER BY location_priority ASC, s.created_at DESC LIMIT ?`;
-      params.push(limit);
+      // Pincode filter: prefer services/providers that match, but don't hard-exclude
+      if (pincode) {
+        query += ` ORDER BY CASE WHEN (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 0 ELSE 1 END ASC, s.created_at DESC LIMIT ?`;
+        params.push(pincode, pincode, pincode, limit);
+      } else {
+        query += ` ORDER BY s.created_at DESC LIMIT ?`;
+        params.push(limit);
+      }
 
       console.log('🔍 [Services-All] QUERY:', query);
       console.log('🔍 [Services-All] PARAMS:', params);
@@ -3832,10 +3827,11 @@ router.get('/api/public/services-all', async (request, env) => {
       
       const transformedServices = (services.results || []).map(service => {
         const parsedImageUrls = imageUrlsArray(service);
-        
+        const providerDisplayName = service.business_name || service.provider_name || 'Service Provider';
+
         return {
           id: service.id,
-          name: service.name,
+          name: service.service_name,
           description: service.description,
           category_id: service.category_id,
           category_name: service.category_name,
@@ -3852,10 +3848,11 @@ router.get('/api/public/services-all', async (request, env) => {
           primaryImage: service.primary_image_url,
           average_rating: 4.5,
           profile_image_url: service.profile_image_url,
+          provider_name: providerDisplayName,
           provider: {
             id: service.provider_id,
-            businessName: service.business_name || 'Service Provider',
-            name: service.name || 'Service Provider',
+            businessName: providerDisplayName,
+            name: providerDisplayName,
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
@@ -3863,11 +3860,10 @@ router.get('/api/public/services-all', async (request, env) => {
             state: service.state || 'Nationwide',
             average_rating: 4.5,
             experience_years: service.experience_years || 0,
-            business_name: service.business_name || 'Service Provider'
+            business_name: providerDisplayName
           },
           createdAt: service.created_at,
           created_at: service.created_at,
-          location_priority: service.location_priority
         };
       });
 
