@@ -214,8 +214,8 @@ export async function createCamp(request, env) {
         start_date, end_date, duration_days, schedule_time, schedule_days,
         max_members, current_enrolled, price, price_type,
         age_min, age_max, location, address, city, pincode,
-        image_urls, primary_image_url, features, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
+        image_urls, primary_image_url, features, status, is_verified, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, datetime('now'), datetime('now'))
     `).bind(
       campId, providerId, title, description || '', camp_type,
       category_id || null, subcategory_id || null,
@@ -356,13 +356,16 @@ export async function getPublicCamps(request, env) {
     const city = url.searchParams.get('city');
     const pincode = url.searchParams.get('pincode');
 
+    const limitParam = parseInt(url.searchParams.get('limit') || '200', 10);
+    const offsetParam = parseInt(url.searchParams.get('offset') || '0', 10);
+    const limit = Math.min(limitParam, 500); // cap at 500
+
     let query = `
       SELECT c.*, p.name as provider_name, p.business_name, p.profile_picture,
         (c.max_members - c.current_enrolled) as slots_remaining
       FROM camps c
       JOIN providers p ON c.provider_id = p.id
       WHERE c.status = 'active'
-        AND COALESCE(c.is_verified, 0) = 1
         AND c.end_date >= date('now')
     `;
     const params = [];
@@ -372,7 +375,8 @@ export async function getPublicCamps(request, env) {
     if (subcategory_id) { query += ` AND c.subcategory_id = ?`; params.push(subcategory_id); }
     if (city) { query += ` AND LOWER(c.city) LIKE ?`; params.push(`%${city.toLowerCase()}%`); }
     if (pincode) { query += ` AND c.pincode = ?`; params.push(pincode); }
-    query += ` ORDER BY c.start_date ASC`;
+    query += ` ORDER BY c.start_date ASC LIMIT ? OFFSET ?`;
+    params.push(limit, offsetParam);
 
     const camps = await env.KUDDL_DB.prepare(query).bind(...params).all();
 

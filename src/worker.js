@@ -4828,6 +4828,58 @@ router.get('/api/check-email', async (request, env) => {
   }
 });
 
+// Permanent camp image upload — stored in partners/{partnerId}/camps/ (never cleaned up)
+router.post('/api/camps/upload-image', async (request, env) => {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization token required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const payload = decoded.payload || decoded;
+    const partnerId = payload.id || payload.sub || payload.userId || payload.provider_id || payload.partnerId;
+
+    if (!partnerId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Partner ID not found in token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const formData = await request.formData();
+    const imageFile = formData.get('image');
+
+    if (!imageFile || !imageFile.size) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'No image file provided' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substring(2, 8);
+    const extension = (imageFile.name || 'image.jpg').split('.').pop() || 'jpg';
+    const fileName = `camp_${timestamp}_${randomId}.${extension}`;
+    const r2Path = `partners/${partnerId}/camps/${fileName}`;
+
+    await env.KUDDL_STORAGE.put(r2Path, imageFile.stream(), {
+      httpMetadata: { contentType: imageFile.type || 'image/jpeg' }
+    });
+
+    const publicUrl = `${env.R2_PUBLIC_URL}/${r2Path}`;
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      data: { imageUrl: publicUrl, r2Path, fileName }
+    }), { headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('Camp image upload error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Upload failed: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+});
+
 // Simple temp image upload for services
 router.post('/api/temp/upload-image', async (request, env) => {
   try {
