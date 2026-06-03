@@ -53,6 +53,10 @@ bucket_name = "kuddl-storage-dev"
 [env.development]
 workers_dev = true
 
+routes = [
+  { pattern = "api-dev.kuddl.co/*", zone_name = "kuddl.co" }
+]
+
 [env.development.vars]
 ENVIRONMENT = "development"
 TWILIO_TEST_MODE = "true"
