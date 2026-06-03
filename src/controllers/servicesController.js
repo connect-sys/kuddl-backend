@@ -962,8 +962,6 @@ export async function getPublicServices(request, env) {
           p.state,
           p.address,
           p.pincode,
-          p.latitude,
-          p.longitude,
           p.experience_years
         FROM services s
         LEFT JOIN categories c ON s.category_id = c.id
@@ -1075,8 +1073,6 @@ export async function getPublicServices(request, env) {
             state: service.state || 'Nationwide',
             address: service.address,
             pincode: service.pincode,
-            latitude: service.latitude,
-            longitude: service.longitude,
             average_rating: 4.5, // Default rating since column doesn't exist
             experience_years: service.experience_years || 0,
             business_name: service.business_name || 'Service Provider',
@@ -1413,8 +1409,9 @@ export async function getPublicServiceById(request, env) {
     }
 
     // Query for specific service with provider details
+    // NB: providers table does NOT have `average_rating` — use COALESCE(rating, 0) instead.
     const service = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         s.id,
         s.name,
         s.description,
@@ -1435,7 +1432,7 @@ export async function getPublicServiceById(request, env) {
         p.profile_picture as profile_image_url,
         p.city,
         p.state,
-        p.average_rating,
+        COALESCE(p.rating, 0) as average_rating,
         p.experience_years
       FROM services s
       JOIN providers p ON s.provider_id = p.id
