@@ -180,6 +180,7 @@ router.get('/api/partner/camp-bookings', (request, env) => campsController.getCa
 
 // Camps routes - public/customer
 router.get('/api/camps', (request, env) => campsController.getPublicCamps(request, env));
+router.get('/api/camps/:campId', (request, env) => campsController.getCampById(request, env));
 router.post('/api/camps/book', (request, env) => campsController.bookCamp(request, env));
 router.get('/api/my-camp-bookings', (request, env) => campsController.getMyBookings(request, env));
 
@@ -2216,6 +2217,18 @@ router.get('/api/debug/table-info', async (request, env) => {
 router.post('/api/auth/google', async (request, env) => {
   const googleAuthController = new GoogleAuthController(env);
   return googleAuthController.handleGoogleAuth(request);
+});
+
+// One-time migration: add google_id + profile_picture to parents table
+router.post('/api/migrate/add-google-columns', async (request, env) => {
+  try {
+    await env.KUDDL_DB.prepare(`ALTER TABLE parents ADD COLUMN google_id TEXT`).run().catch(() => {});
+    await env.KUDDL_DB.prepare(`ALTER TABLE parents ADD COLUMN profile_picture TEXT DEFAULT ''`).run().catch(() => {});
+    await env.KUDDL_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_parents_google_id ON parents(google_id)`).run().catch(() => {});
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Columns added (or already exist)' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (e) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
 });
 
 router.get('/api/auth/profile', async (request, env) => {
@@ -4661,13 +4674,16 @@ router.get('/api/public/services/:id', async (request, env) => {
       WHERE s.id = ? AND p.id IS NOT NULL AND COALESCE(s.is_verified, 0) = 1
     `).bind(serviceId).first();
 
-    // If not found in services, check the camps table (also gated by verification)
+    // If not found in services, check the camps table.
+    // Aligns with /api/camps (the public list) which gates on status only,
+    // not is_verified — wizard-created camps must be reachable from the cards
+    // they appear in.
     if (!service) {
       const camp = await env.KUDDL_DB.prepare(`
         SELECT c.*, p.business_name, p.name as provider_name, p.profile_picture as provider_profile_image
         FROM camps c
         LEFT JOIN providers p ON c.provider_id = p.id
-        WHERE c.id = ? AND COALESCE(c.is_verified, 0) = 1
+        WHERE c.id = ? AND c.status IN ('active','live')
       `).bind(serviceId).first();
 
       if (!camp) {

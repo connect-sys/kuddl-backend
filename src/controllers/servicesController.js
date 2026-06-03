@@ -1444,13 +1444,97 @@ export async function getPublicServiceById(request, env) {
     `).bind(serviceId).first();
 
     if (!service) {
+      // Fall back to the camps table — same route is used by the customer portal
+      // for both service and camp detail pages.
+      const camp = await env.KUDDL_DB.prepare(`
+        SELECT
+          k.*,
+          c.name AS category_name,
+          c.module AS category_module,
+          p.id AS provider_db_id,
+          p.name AS provider_name,
+          p.business_name,
+          p.profile_picture AS profile_image_url,
+          p.city AS provider_city,
+          p.state AS provider_state,
+          p.average_rating,
+          p.experience_years
+        FROM camps k
+        JOIN providers p ON k.provider_id = p.id
+        LEFT JOIN categories c ON k.category_id = c.id
+        WHERE k.id = ? AND k.status IN ('active','live')
+          AND p.is_active = 1 AND p.kyc_status = 'verified'
+      `).bind(serviceId).first();
+
+      if (!camp) {
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'Service not found or provider inactive'
+        }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        }));
+      }
+
+      const parse = (v, fb) => {
+        if (v == null) return fb;
+        if (typeof v !== 'string') return v;
+        try { return JSON.parse(v); } catch { return fb; }
+      };
+      const imageUrls = parse(camp.image_urls, []);
+      const features = parse(camp.features, []);
+      const startDate = camp.start_date;
+      const endDate = camp.end_date;
+      let durationDays = camp.duration_days;
+      if (!durationDays && startDate && endDate) {
+        const s = new Date(startDate), e = new Date(endDate);
+        if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+          durationDays = Math.max(1, Math.ceil((e - s) / 86400000) + 1);
+        }
+      }
+
+      const campResponse = {
+        id: camp.id,
+        name: camp.title,
+        description: camp.description,
+        category: camp.category_id,
+        categoryName: camp.category_name,
+        categoryModule: camp.category_module,
+        subcategory: camp.subcategory_id,
+        priceType: camp.price_type,
+        price: camp.price,
+        duration: null,
+        duration_days: durationDays,
+        start_date: startDate,
+        end_date: endDate,
+        schedule_time: camp.schedule_start_time || camp.schedule_time || null,
+        features: Array.isArray(features) ? features : [],
+        availablePincodes: camp.pincode ? [String(camp.pincode)] : [],
+        image_urls: Array.isArray(imageUrls) ? imageUrls : [],
+        images: Array.isArray(imageUrls) ? imageUrls : [],
+        primary_image_url: camp.primary_image_url || null,
+        primaryImage: camp.primary_image_url || null,
+        item_type: 'camp',
+        provider: {
+          id: camp.provider_id,
+          businessName: camp.business_name,
+          name: camp.provider_name || camp.business_name,
+          profileImage: camp.profile_image_url,
+          profile_image_url: camp.profile_image_url,
+          location: `${camp.provider_city || ''}${camp.provider_state ? ', ' + camp.provider_state : ''}`,
+          city: camp.provider_city,
+          state: camp.provider_state,
+          average_rating: camp.average_rating || 4.5,
+          experience_years: camp.experience_years || 3,
+          business_name: camp.business_name,
+        },
+        createdAt: camp.created_at,
+      };
+
       return addCorsHeaders(new Response(JSON.stringify({
-        success: false,
-        message: 'Service not found or provider inactive'
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      }));
+        success: true,
+        data: campResponse,
+      }), { headers: { 'Content-Type': 'application/json' } }));
     }
 
     // Verify category exists

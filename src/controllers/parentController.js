@@ -342,7 +342,25 @@ export async function updateParentProfile(request, env) {
         // Create new parent only if none exists
         parentId = generateId();
         console.log('🆕 Creating new parent with ID:', parentId);
-        
+
+        // Email is UNIQUE — if another parent already owns this email, insert
+        // the new row without the email rather than 500-ing the booking flow.
+        let safeEmail = updateData.email || '';
+        if (safeEmail) {
+          try {
+            const collision = await env.KUDDL_DB.prepare(
+              'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) LIMIT 1'
+            ).bind(safeEmail).first();
+            if (collision) {
+              console.log('⚠️ Email already in use — inserting parent without email:', safeEmail);
+              safeEmail = '';
+            }
+          } catch (e) {
+            console.warn('Email-collision check failed (insert):', e?.message);
+            safeEmail = '';
+          }
+        }
+
         await env.KUDDL_DB.prepare(`
           INSERT INTO parents (
             id, phone, fullname, email, address, created_at, updated_at
@@ -350,13 +368,13 @@ export async function updateParentProfile(request, env) {
         `).bind(
           parentId,
           normalizedPhone,
-          updateData.fullname || updateData.fullName || updateData.name || 'Parent User',
-          updateData.email || '',
+          updateData.full_name || updateData.fullname || updateData.fullName || updateData.name || 'Parent User',
+          safeEmail,
           updateData.address || '',
           new Date().toISOString(),
           new Date().toISOString()
         ).run();
-        
+
         console.log('✅ Created new parent:', parentId);
       }
     }
@@ -396,8 +414,27 @@ export async function updateParentProfile(request, env) {
 
     // Update parent profile (excluding phone to avoid UNIQUE constraint issues)
     const parentUpdates = {};
-    if (updateData.fullname || updateData.fullName || updateData.name) parentUpdates.fullname = updateData.fullname || updateData.fullName || updateData.name;
-    if (updateData.email) parentUpdates.email = updateData.email;
+    if (updateData.full_name || updateData.fullname || updateData.fullName || updateData.name) parentUpdates.fullname = updateData.full_name || updateData.fullname || updateData.fullName || updateData.name;
+
+    // Email has a UNIQUE constraint. If the requested email already belongs
+    // to a different parent row, skip the email update silently rather than
+    // 500-ing out — the booking flow doesn't actually need to change the
+    // current parent's email, and blocking it locked users at Step 2.
+    if (updateData.email) {
+      try {
+        const collision = await env.KUDDL_DB.prepare(
+          'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) AND id != ? LIMIT 1'
+        ).bind(updateData.email, parentId).first();
+        if (!collision) {
+          parentUpdates.email = updateData.email;
+        } else {
+          console.log('⚠️ Email already used by another parent — skipping email update:', updateData.email);
+        }
+      } catch (emailCheckErr) {
+        console.warn('Email-collision check failed, skipping email update:', emailCheckErr?.message);
+      }
+    }
+
     if (updateData.gender) parentUpdates.gender = updateData.gender;
     if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
     if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;

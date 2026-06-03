@@ -1,205 +1,144 @@
 /**
  * Google OAuth Controller for Kuddl Backend
- * Handles Google Sign-In authentication and user data storage in Cloudflare D1
+ * Uses the `parents` table (same as OTP auth) for consistency.
  */
 
-// import { generateToken } from '../utils/jwt.js'; // TODO: Fix JWT utility import
+import jwt from '@tsndr/cloudflare-worker-jwt';
+
+const CORS_HEADERS = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
 
 export class GoogleAuthController {
   constructor(env) {
     this.env = env;
-    this.db = env.DB; // Cloudflare D1 database binding
+    this.db = env.KUDDL_DB;
   }
 
   /**
    * Handle Google OAuth login/signup
    * POST /api/auth/google
+   * Body: { googleId, email, name, firstName, lastName, profilePicture }
    */
   async handleGoogleAuth(request) {
     try {
       const body = await request.json();
       const { googleId, email, name, firstName, lastName, profilePicture } = body;
 
-      // Validate required fields
-      if (!googleId || !email || !name) {
-        return new Response(JSON.stringify({
-          success: false,
-          message: 'Missing required fields: googleId, email, name'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
+      if (!email) {
+        return json({ success: false, message: 'email is required' }, 400);
       }
 
-      // Check if user already exists
-      const existingUser = await this.db.prepare(
-        'SELECT * FROM customers WHERE google_id = ? OR email = ?'
-      ).bind(googleId, email).first();
+      const fullName = name || `${firstName || ''} ${lastName || ''}`.trim() || 'User';
+      const nameParts = fullName.trim().split(' ');
+      const fName = firstName || nameParts[0] || '';
+      const lName = lastName || nameParts.slice(1).join(' ') || '';
 
-      let user;
+      // Find parent by email (most reliable — email always exists in parents table)
+      let existingParent = null;
       let isNewUser = false;
+      let parentId;
 
-      if (existingUser) {
-        // Update existing user's Google info if needed
-        user = await this.db.prepare(`
-          UPDATE customers 
-          SET 
-            google_id = ?,
-            name = ?,
-            first_name = ?,
-            last_name = ?,
-            profile_picture = ?,
-            updated_at = datetime('now')
-          WHERE id = ?
-          RETURNING *
-        `).bind(
-          googleId,
-          name,
-          firstName || existingUser.first_name,
-          lastName || existingUser.last_name,
-          profilePicture || existingUser.profile_picture,
-          existingUser.id
-        ).first();
+      try {
+        existingParent = await this.db.prepare(
+          `SELECT id, fullname, email FROM parents WHERE email = ? LIMIT 1`
+        ).bind(email).first();
+      } catch (e) {
+        console.error('Google auth — lookup error:', e.message);
+      }
+
+      if (existingParent) {
+        parentId = existingParent.id;
+        // Update name if it was a placeholder
+        try {
+          await this.db.prepare(
+            `UPDATE parents SET fullname = ?, updated_at = ? WHERE id = ?`
+          ).bind(fullName, new Date().toISOString(), parentId).run();
+        } catch (_) { /* non-critical */ }
       } else {
-        // Create new user
+        // Create new parent using only core columns (id, phone, fullname, email, created_at, updated_at)
         isNewUser = true;
-        const userId = crypto.randomUUID();
-        
-        user = await this.db.prepare(`
-          INSERT INTO customers (
-            id, google_id, email, name, first_name, last_name, 
-            profile_picture, auth_provider, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'google', datetime('now'), datetime('now'))
-          RETURNING *
-        `).bind(
-          userId,
-          googleId,
-          email,
-          name,
-          firstName,
-          lastName,
-          profilePicture
-        ).first();
+        parentId = crypto.randomUUID();
+        const now = new Date().toISOString();
+        await this.db.prepare(
+          `INSERT INTO parents (id, phone, fullname, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(parentId, '', fullName, email, now, now).run();
       }
 
-      if (!user) {
-        throw new Error('Failed to create or update user');
+      // Best-effort: store google_id for future lookups (column added via migration)
+      if (googleId) {
+        try {
+          await this.db.prepare(
+            `UPDATE parents SET google_id = ? WHERE id = ?`
+          ).bind(googleId, parentId).run();
+        } catch (_) { /* google_id column may not exist yet — safe to ignore */ }
       }
 
-      // Generate JWT token
-      const token = generateToken({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        type: 'customer'
-      });
+      // Generate JWT (same structure as OTP auth)
+      const jwtSecret = this.env.JWT_SECRET || '';
+      if (!jwtSecret) throw new Error('JWT_SECRET not configured');
 
-      // Log the authentication event
-      await this.logAuthEvent(user.id, 'google_login', request);
+      const token = await jwt.sign({
+        id: parentId,
+        email,
+        role: 'customer',
+        exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60),
+      }, jwtSecret);
 
-      return new Response(JSON.stringify({
+      return json({
         success: true,
         message: isNewUser ? 'Account created successfully' : 'Login successful',
+        token,
         user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          profilePicture: user.profile_picture,
-          isNewUser
+          id: parentId,
+          email,
+          first_name: fName,
+          last_name: lName,
+          full_name: fullName,
+          profile_picture: profilePicture || '',
+          role: 'customer',
+          isNewUser,
         },
-        token
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
       });
 
     } catch (error) {
-      console.error('Google auth error:', error);
-      return new Response(JSON.stringify({
-        success: false,
-        message: 'Authentication failed',
-        error: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      console.error('Google auth error:', error.message, error.stack);
+      return json({ success: false, message: 'Authentication failed', error: error.message }, 500);
     }
   }
 
   /**
-   * Log authentication events for security and analytics
-   */
-  async logAuthEvent(userId, eventType, request) {
-    try {
-      const userAgent = request.headers.get('User-Agent') || '';
-      const ip = request.headers.get('CF-Connecting-IP') || 
-                 request.headers.get('X-Forwarded-For') || 
-                 'unknown';
-
-      await this.db.prepare(`
-        INSERT INTO auth_logs (
-          id, user_id, event_type, ip_address, user_agent, created_at
-        ) VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).bind(
-        crypto.randomUUID(),
-        userId,
-        eventType,
-        ip,
-        userAgent
-      ).run();
-    } catch (error) {
-      console.error('Failed to log auth event:', error);
-      // Don't throw error as this is not critical
-    }
-  }
-
-  /**
-   * Get user profile by token
-   * GET /api/auth/profile
+   * Get user profile  — GET /api/auth/profile
    */
   async getUserProfile(request, userId) {
     try {
-      const user = await this.db.prepare(
-        'SELECT id, email, name, first_name, last_name, profile_picture, created_at FROM customers WHERE id = ?'
+      const parent = await this.db.prepare(
+        `SELECT id, email, fullname, google_id, created_at FROM parents WHERE id = ? LIMIT 1`
       ).bind(userId).first();
 
-      if (!user) {
-        return new Response(JSON.stringify({
-          success: false,
-          message: 'User not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+      if (!parent) return json({ success: false, message: 'User not found' }, 404);
 
-      return new Response(JSON.stringify({
+      const nameParts = (parent.fullname || '').trim().split(' ');
+      return json({
         success: true,
         user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          profilePicture: user.profile_picture,
-          memberSince: user.created_at
-        }
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
+          id: parent.id,
+          email: parent.email,
+          firstName: nameParts[0] || '',
+          lastName: nameParts.slice(1).join(' ') || '',
+          fullName: parent.fullname || '',
+          memberSince: parent.created_at,
+        },
       });
-
     } catch (error) {
       console.error('Get profile error:', error);
-      return new Response(JSON.stringify({
-        success: false,
-        message: 'Failed to get user profile'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return json({ success: false, message: 'Failed to get user profile' }, 500);
     }
   }
 }

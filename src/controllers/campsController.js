@@ -346,6 +346,46 @@ export async function getPartnerCamps(request, env) {
   }
 }
 
+// Get a single camp by ID (public)
+export async function getCampById(request, env) {
+  try {
+    const url = new URL(request.url);
+    const parts = url.pathname.split('/');
+    const campId = parts[parts.length - 1];
+
+    if (!campId) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'camp_id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+
+    const camp = await env.KUDDL_DB.prepare(`
+      SELECT c.*, p.name as provider_name, p.business_name, p.profile_picture,
+        p.city as provider_city,
+        (c.max_members - c.current_enrolled) as slots_remaining
+      FROM camps c
+      JOIN providers p ON c.provider_id = p.id
+      WHERE c.id = ?
+    `).bind(campId).first();
+
+    if (!camp) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Camp not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      camp: {
+        ...camp,
+        image_urls: JSON.parse(camp.image_urls || '[]'),
+        features: JSON.parse(camp.features || '[]'),
+        is_full: (camp.slots_remaining || 0) <= 0,
+        item_type: 'camp',
+        name: camp.title,
+        price_type: camp.price_type || 'camp',
+        category_id: 'cat_discover',
+        category_module: 'DISCOVER',
+      }
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to fetch camp', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 // Get public camps (customer side)
 export async function getPublicCamps(request, env) {
   try {
@@ -537,9 +577,9 @@ export async function bookCamp(request, env) {
       created_at: new Date().toISOString()
     };
 
-    // QR code URL encoding booking details
-    const qrPayload = encodeURIComponent(JSON.stringify({ type: 'camp_booking', booking_id: bookingId, invoice_id: invoiceId, camp: camp.title }));
-    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${qrPayload}&size=250x250&format=png`;
+    // QR encodes a public Kuddl invoice page URL — scanning opens the booking details page
+    const invoicePageUrl = `https://kuddl.co/invoice/${invoiceId}`;
+    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl)}&size=300x300&format=png`;
 
     await env.KUDDL_DB.prepare(`
       INSERT INTO camp_bookings (
@@ -641,13 +681,16 @@ export async function getBookingByInvoice(request, env) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'invoice_id or booking_id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    // Check camp bookings
+    // Check camp bookings first
     let booking = null;
+    let bookingType = 'camp';
     if (invoiceId) {
       booking = await env.KUDDL_DB.prepare(`
-        SELECT cb.*, c.title as camp_title, c.camp_type, c.start_date as camp_start, c.schedule_time,
-          c.location, p.name as provider_name, p.business_name,
-          par.fullname as parent_name, par.phone as parent_phone
+        SELECT cb.*,
+          c.title as camp_title, c.camp_type, c.start_date as camp_start, c.end_date as camp_end,
+          c.schedule_time, c.location, c.city, c.address, c.age_min, c.age_max, c.primary_image_url,
+          p.name as provider_name, p.business_name, p.city as provider_city,
+          par.fullname as parent_name, par.phone as parent_phone, par.email as parent_email
         FROM camp_bookings cb
         JOIN camps c ON cb.camp_id = c.id
         JOIN providers p ON cb.provider_id = p.id
@@ -656,18 +699,23 @@ export async function getBookingByInvoice(request, env) {
       `).bind(invoiceId).first();
     } else {
       booking = await env.KUDDL_DB.prepare(`
-        SELECT cb.*, c.title as camp_title, c.camp_type
+        SELECT cb.*, c.title as camp_title, c.camp_type, c.start_date as camp_start, c.end_date as camp_end,
+          c.primary_image_url, par.fullname as parent_name, par.phone as parent_phone
         FROM camp_bookings cb
         JOIN camps c ON cb.camp_id = c.id
+        LEFT JOIN parents par ON cb.parent_id = par.id
         WHERE cb.id = ?
       `).bind(bookingId).first();
     }
 
     // Also check regular bookings
     if (!booking) {
+      bookingType = 'service';
       booking = await env.KUDDL_DB.prepare(`
-        SELECT b.*, s.name as service_name, p.name as provider_name, p.business_name,
-          par.fullname as parent_name, par.phone as parent_phone
+        SELECT b.*, s.name as service_name, s.description as service_description,
+          s.price_type, s.duration_minutes, s.primary_image_url,
+          p.name as provider_name, p.business_name, p.city as provider_city,
+          par.fullname as parent_name, par.phone as parent_phone, par.email as parent_email
         FROM bookings b
         LEFT JOIN services s ON b.service_id = s.id
         LEFT JOIN providers p ON b.provider_id = p.id
@@ -678,11 +726,16 @@ export async function getBookingByInvoice(request, env) {
 
     if (!booking) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Booking not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
 
+    // Parse invoice_data if present (contains child info snapshot)
+    let invoiceData = null;
+    try { invoiceData = booking.invoice_data ? JSON.parse(booking.invoice_data) : null; } catch { /* ignore */ }
+
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
+      booking_type: bookingType,
       booking: {
         ...booking,
-        invoice_data: booking.invoice_data ? JSON.parse(booking.invoice_data) : null
+        invoice_data: invoiceData
       }
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 

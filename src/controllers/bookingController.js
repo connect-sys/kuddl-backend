@@ -198,7 +198,18 @@ export async function createBooking(request, env) {
           // Update existing parent
           const parentUpdates = {};
           if (parentDetails.fullName || parentDetails.name) parentUpdates.fullname = parentDetails.fullName || parentDetails.name;
-          if (parentDetails.email) parentUpdates.email = parentDetails.email;
+          // Skip email update if another parent already owns this email
+          // (UNIQUE(email) constraint — would otherwise 500 the booking).
+          if (parentDetails.email) {
+            try {
+              const emailCollision = await env.KUDDL_DB.prepare(
+                'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) AND id != ? LIMIT 1'
+              ).bind(parentDetails.email, parentId).first();
+              if (!emailCollision) parentUpdates.email = parentDetails.email;
+            } catch (e) {
+              console.warn('Booking email-collision check failed; skipping email update:', e?.message);
+            }
+          }
           if (parentDetails.phone) parentUpdates.phone = parentDetails.phone;
           if (parentDetails.address) parentUpdates.address = parentDetails.address;
           if (parentDetails.city) parentUpdates.city = parentDetails.city;
@@ -220,20 +231,14 @@ export async function createBooking(request, env) {
           // Create new parent profile
           await env.KUDDL_DB.prepare(`
             INSERT INTO parents (
-              id, phone, email, fullname, address, city, state, pincode,
-              alternate_contact_name, alternate_contact_phone, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              id, phone, email, fullname, address, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
             parentId,
             parentDetails.phone || '',
             parentDetails.email || '',
             parentDetails.fullName || '',
             parentDetails.address || '',
-            parentDetails.city || '',
-            parentDetails.state || '',
-            parentDetails.pincode || '',
-            parentDetails.alternateContactName || '',
-            parentDetails.alternateContactPhone || '',
             new Date().toISOString(),
             new Date().toISOString()
           ).run();
@@ -322,8 +327,8 @@ export async function createBooking(request, env) {
       payment_status: initialPaymentStatus,
       created_at: new Date().toISOString()
     };
-    const qrPayload = encodeURIComponent(JSON.stringify({ type: 'service_booking', booking_id: bookingId, invoice_id: invoiceId }));
-    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${qrPayload}&size=250x250&format=png`;
+    const invoicePageUrl = `https://kuddl.co/invoice/${invoiceId}`;
+    const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl)}&size=300x300&format=png`;
 
     const durationHours = durationMinutes / 60;
     
@@ -919,8 +924,8 @@ export async function acceptBooking(request, env) {
     let invoiceQrUrl = booking.invoice_qr_url;
     if (!invoiceId) {
       invoiceId = `INV-${Date.now()}`;
-      const qrPayload = encodeURIComponent(JSON.stringify({ type: 'service_booking', booking_id: bookingId, invoice_id: invoiceId }));
-      invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${qrPayload}&size=250x250&format=png`;
+      const invoicePageUrl2 = `https://kuddl.co/invoice/${invoiceId}`;
+      invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl2)}&size=300x300&format=png`;
       await env.KUDDL_DB.prepare(`UPDATE bookings SET invoice_id = ?, invoice_qr_url = ? WHERE id = ?`).bind(invoiceId, invoiceQrUrl, bookingId).run();
     }
 
