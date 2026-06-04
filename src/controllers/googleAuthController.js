@@ -62,13 +62,29 @@ export class GoogleAuthController {
           ).bind(fullName, new Date().toISOString(), parentId).run();
         } catch (_) { /* non-critical */ }
       } else {
-        // Create new parent using only core columns (id, phone, fullname, email, created_at, updated_at)
+        // Create new parent using only core columns
+        // (id, phone, fullname, email, created_at, updated_at).
+        // parents.phone has a UNIQUE constraint and the column is NOT NULL.
+        // If another row already holds phone='' (a stale legacy account),
+        // use a per-Google-account placeholder so we don't 500 the signup.
+        // The user can set their real phone from the profile later.
         isNewUser = true;
         parentId = crypto.randomUUID();
         const now = new Date().toISOString();
+
+        let phoneToInsert = '';
+        try {
+          const collision = await this.db.prepare(
+            `SELECT id FROM parents WHERE phone = ? LIMIT 1`
+          ).bind('').first();
+          if (collision) {
+            phoneToInsert = `g:${googleId || parentId}`;
+          }
+        } catch (_) { /* ignore — fall through with '' */ }
+
         await this.db.prepare(
           `INSERT INTO parents (id, phone, fullname, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
-        ).bind(parentId, '', fullName, email, now, now).run();
+        ).bind(parentId, phoneToInsert, fullName, email, now, now).run();
       }
 
       // Best-effort: store google_id for future lookups (column added via migration)

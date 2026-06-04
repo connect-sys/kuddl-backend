@@ -443,10 +443,6 @@ export async function updateParentProfile(request, env) {
     if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
     // Skip phone update to avoid UNIQUE constraint conflicts
     if (updateData.address) parentUpdates.address = updateData.address;
-    if (updateData.city) parentUpdates.city = updateData.city;
-    if (updateData.state) parentUpdates.state = updateData.state;
-    if (updateData.pincode) parentUpdates.pincode = updateData.pincode;
-    if (updateData.country) parentUpdates.country = updateData.country;
     if (updateData.alternate_contact_name || updateData.alternateContactName) parentUpdates.alternate_contact_name = updateData.alternate_contact_name || updateData.alternateContactName;
     if (updateData.alternate_contact_phone || updateData.alternateContactPhone) parentUpdates.alternate_contact_phone = updateData.alternate_contact_phone || updateData.alternateContactPhone;
 

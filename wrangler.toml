@@ -51,6 +51,7 @@ bucket_name = "kuddl-storage-dev"
 
 # ─── Development environment ───────────────────────────────────────────────
 [env.development]
+name = "kuddl-backend-dev"
 workers_dev = true
 
 routes = [
