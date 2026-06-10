@@ -3,12 +3,12 @@
  * Handles Google Sign-In authentication and user data storage in Cloudflare D1
  */
 
-// import { generateToken } from '../utils/jwt.js'; // TODO: Fix JWT utility import
+import jwt from '@tsndr/cloudflare-worker-jwt';
 
 export class GoogleAuthController {
   constructor(env) {
     this.env = env;
-    this.db = env.DB; // Cloudflare D1 database binding
+    this.db = env.KUDDL_DB;
   }
 
   /**
@@ -87,12 +87,13 @@ export class GoogleAuthController {
       }
 
       // Generate JWT token
-      const token = generateToken({
+      const token = await jwt.sign({
         id: user.id,
         email: user.email,
         name: user.name,
-        type: 'customer'
-      });
+        type: 'customer',
+        exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60),
+      }, this.env.JWT_SECRET);
 
       // Log the authentication event
       await this.logAuthEvent(user.id, 'google_login', request);
@@ -103,11 +104,12 @@ export class GoogleAuthController {
         user: {
           id: user.id,
           email: user.email,
-          name: user.name,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          profilePicture: user.profile_picture,
-          isNewUser
+          full_name: user.name,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          profile_picture: user.profile_picture,
+          role: 'customer',
+          isNewUser,
         },
         token
       }), {
