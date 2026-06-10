@@ -343,21 +343,26 @@ export async function updateParentProfile(request, env) {
         parentId = generateId();
         console.log('🆕 Creating new parent with ID:', parentId);
 
-        // Email is UNIQUE — if another parent already owns this email, insert
-        // the new row without the email rather than 500-ing the booking flow.
-        let safeEmail = updateData.email || '';
+        // Email is UNIQUE. Two important quirks of SQLite UNIQUE:
+        //   • NULL values are allowed to repeat (multiple rows can have NULL)
+        //   • Empty strings ARE NOT considered NULL — two `''` rows collide.
+        // So when we can't safely store the requested email (collision OR
+        // user gave us no email) we MUST insert NULL, not ''. Inserting ''
+        // was the root cause of "UNIQUE constraint failed: parents.email"
+        // because legacy rows in prod already have `email = ''`.
+        let safeEmail = updateData.email && updateData.email.trim() ? updateData.email.trim() : null;
         if (safeEmail) {
           try {
             const collision = await env.KUDDL_DB.prepare(
               'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) LIMIT 1'
             ).bind(safeEmail).first();
             if (collision) {
-              console.log('⚠️ Email already in use — inserting parent without email:', safeEmail);
-              safeEmail = '';
+              console.log('⚠️ Email already in use — inserting parent with NULL email:', safeEmail);
+              safeEmail = null;
             }
           } catch (e) {
             console.warn('Email-collision check failed (insert):', e?.message);
-            safeEmail = '';
+            safeEmail = null;
           }
         }
 
@@ -416,19 +421,24 @@ export async function updateParentProfile(request, env) {
     const parentUpdates = {};
     if (updateData.full_name || updateData.fullname || updateData.fullName || updateData.name) parentUpdates.fullname = updateData.full_name || updateData.fullname || updateData.fullName || updateData.name;
 
-    // Email has a UNIQUE constraint. If the requested email already belongs
-    // to a different parent row, skip the email update silently rather than
-    // 500-ing out — the booking flow doesn't actually need to change the
-    // current parent's email, and blocking it locked users at Step 2.
-    if (updateData.email) {
+    // Email has a UNIQUE constraint. Three things to defend against:
+    //   1. The requested email already belongs to a different parent row →
+    //      skip the email update silently.
+    //   2. updateData.email is an empty/whitespace string — writing it would
+    //      collide with legacy rows that hold email = '' (SQLite treats ''
+    //      as a regular value, not NULL, so the UNIQUE constraint trips).
+    //   3. updateData.email is undefined (not part of this request) → leave
+    //      the existing column value alone.
+    const emailTrimmed = (updateData.email || '').trim();
+    if (emailTrimmed) {
       try {
         const collision = await env.KUDDL_DB.prepare(
           'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) AND id != ? LIMIT 1'
-        ).bind(updateData.email, parentId).first();
+        ).bind(emailTrimmed, parentId).first();
         if (!collision) {
-          parentUpdates.email = updateData.email;
+          parentUpdates.email = emailTrimmed;
         } else {
-          console.log('⚠️ Email already used by another parent — skipping email update:', updateData.email);
+          console.log('⚠️ Email already used by another parent — skipping email update:', emailTrimmed);
         }
       } catch (emailCheckErr) {
         console.warn('Email-collision check failed, skipping email update:', emailCheckErr?.message);
