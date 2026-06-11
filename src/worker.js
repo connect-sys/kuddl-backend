@@ -2862,6 +2862,10 @@ router.post('/api/parent/children', async (request, env) => {
   return parentController.addChild(request, env);
 });
 
+router.put('/api/parent/children/:id', async (request, env) => {
+  return parentController.updateChild(request, env, request.params.id);
+});
+
 router.get('/api/parent/bookings', async (request, env) => {
   return parentController.getParentBookings(request, env);
 });

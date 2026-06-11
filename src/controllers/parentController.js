@@ -312,113 +312,60 @@ export async function updateParentProfile(request, env) {
   try {
     console.log('🔍 Parent Profile Update API called');
     const updateData = await request.json();
-    console.log('🔍 Update data received:', updateData);
-    
+
     let parentId = null;
-    
-    // Primary method: Find/create parent by phone number (no token required)
-    if (updateData.phone) {
-      console.log('🔍 Processing phone:', updateData.phone);
-      const formattedPhone = updateData.phone.replace(/\D/g, '');
-      
-      // Normalize phone number - remove country code if present to match existing data
-      let normalizedPhone = formattedPhone;
-      if (normalizedPhone.startsWith('91') && normalizedPhone.length === 12) {
-        normalizedPhone = normalizedPhone.substring(2); // Remove 91 prefix
-      }
-      
-      console.log('🔍 Using normalized phone:', normalizedPhone);
-      
-      // Find existing parent first
-      const existingParent = await env.KUDDL_DB.prepare(`
-        SELECT id FROM parents WHERE phone = ?
-      `).bind(normalizedPhone).first();
-      
-      if (existingParent) {
-        parentId = existingParent.id;
-        console.log('✅ Found existing parent:', parentId);
-        // Continue to UPDATE section to update existing parent
-      } else {
-        // Create new parent only if none exists
-        parentId = generateId();
-        console.log('🆕 Creating new parent with ID:', parentId);
 
-        // Email is UNIQUE. Two important quirks of SQLite UNIQUE:
-        //   • NULL values are allowed to repeat (multiple rows can have NULL)
-        //   • Empty strings ARE NOT considered NULL — two `''` rows collide.
-        // So when we can't safely store the requested email (collision OR
-        // user gave us no email) we MUST insert NULL, not ''. Inserting ''
-        // was the root cause of "UNIQUE constraint failed: parents.email"
-        // because legacy rows in prod already have `email = ''`.
-        let safeEmail = updateData.email && updateData.email.trim() ? updateData.email.trim() : null;
-        if (safeEmail) {
-          try {
-            const collision = await env.KUDDL_DB.prepare(
-              'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) LIMIT 1'
-            ).bind(safeEmail).first();
-            if (collision) {
-              console.log('⚠️ Email already in use — inserting parent with NULL email:', safeEmail);
-              safeEmail = null;
-            }
-          } catch (e) {
-            console.warn('Email-collision check failed (insert):', e?.message);
-            safeEmail = null;
-          }
+    // Always identify the parent from the JWT token — never use the submitted
+    // phone as a lookup key (it may be a NEW phone the user wants to set).
+    const authHeader = request.headers.get('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        const isValid = await jwt.verify(token, env.JWT_SECRET);
+        if (isValid) {
+          const decoded = jwt.decode(token);
+          parentId = decoded.payload.id;
+          console.log('✅ Got parent ID from token:', parentId);
         }
-
-        await env.KUDDL_DB.prepare(`
-          INSERT INTO parents (
-            id, phone, fullname, email, address, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          parentId,
-          normalizedPhone,
-          updateData.full_name || updateData.fullname || updateData.fullName || updateData.name || 'Parent User',
-          safeEmail,
-          updateData.address || '',
-          new Date().toISOString(),
-          new Date().toISOString()
-        ).run();
-
-        console.log('✅ Created new parent:', parentId);
+      } catch (tokenError) {
+        console.log('⚠️ Token validation failed:', tokenError.message);
       }
     }
-    
-    // Fallback: Try JWT token if phone method failed
+
     if (!parentId) {
-      const authHeader = request.headers.get('Authorization');
-      console.log('🔄 Fallback to token authentication');
-      
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        console.log('🔍 Token extracted:', token.substring(0, 50) + '...');
-        
-        try {
-          const isValid = await jwt.verify(token, env.JWT_SECRET);
-          if (isValid) {
-            const decoded = jwt.decode(token);
-            parentId = decoded.payload.id;
-            console.log('✅ Got parent ID from token:', parentId);
-          }
-        } catch (tokenError) {
-          console.log('⚠️ Token validation failed:', tokenError.message);
-        }
-      }
-    }
-    
-    if (!parentId) {
-      console.log('❌ No parent ID found via phone or token');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'Phone number is required to update profile'
+        message: 'Authentication required to update profile'
       }), {
-        status: 400,
+        status: 401,
         headers: { 'Content-Type': 'application/json' }
       }));
     }
 
-    // Update parent profile (excluding phone to avoid UNIQUE constraint issues)
+    // Update parent profile
     const parentUpdates = {};
+
+    // Allow phone update only when current phone is a g: placeholder or empty
+    const newPhone = (updateData.phone || '').trim().replace(/\s+/g, '');
+    if (newPhone && /^\+?\d{7,15}$/.test(newPhone)) {
+      const currentRow = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ? LIMIT 1').bind(parentId).first();
+      const currentPhone = (currentRow?.phone || '');
+      if (!currentPhone || currentPhone.startsWith('g:')) {
+        const collision = await env.KUDDL_DB.prepare(
+          'SELECT id FROM parents WHERE phone = ? AND id != ? LIMIT 1'
+        ).bind(newPhone, parentId).first();
+        if (collision) {
+          return addCorsHeaders(new Response(JSON.stringify({
+            success: false,
+            message: 'This phone number is already linked to another account'
+          }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
+        parentUpdates.phone = newPhone;
+      }
+    }
     if (updateData.full_name || updateData.fullname || updateData.fullName || updateData.name) parentUpdates.fullname = updateData.full_name || updateData.fullname || updateData.fullName || updateData.name;
 
     // Email has a UNIQUE constraint. Three things to defend against:
@@ -448,13 +395,8 @@ export async function updateParentProfile(request, env) {
     if (updateData.gender) parentUpdates.gender = updateData.gender;
     if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
     if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
-    if (updateData.gender) parentUpdates.gender = updateData.gender;
-    if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
-    if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
     // Skip phone update to avoid UNIQUE constraint conflicts
     if (updateData.address) parentUpdates.address = updateData.address;
-    if (updateData.alternate_contact_name || updateData.alternateContactName) parentUpdates.alternate_contact_name = updateData.alternate_contact_name || updateData.alternateContactName;
-    if (updateData.alternate_contact_phone || updateData.alternateContactPhone) parentUpdates.alternate_contact_phone = updateData.alternate_contact_phone || updateData.alternateContactPhone;
 
     console.log('🔍 Parent updates to apply:', parentUpdates);
     
@@ -483,13 +425,15 @@ export async function updateParentProfile(request, env) {
 
   } catch (error) {
     console.error('❌ Update parent profile error:', error);
-    console.error('❌ Error details:', error.message);
-    console.error('❌ Error stack:', error.stack);
+    const isUniqueConflict = (error.message || '').toLowerCase().includes('unique') || (error.message || '').toLowerCase().includes('sqlite_constraint');
+    const message = isUniqueConflict
+      ? 'This phone number is already linked to another account. Please use a different number.'
+      : 'Failed to update parent profile: ' + error.message;
     return addCorsHeaders(new Response(JSON.stringify({
       success: false,
-      message: 'Failed to update parent profile: ' + error.message
+      message,
     }), {
-      status: 500,
+      status: isUniqueConflict ? 409 : 500,
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -663,6 +607,64 @@ export async function addChild(request, env) {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     }));
+  }
+}
+
+// Update child
+export async function updateChild(request, env, childId) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization token required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const parentId = decoded.payload.id;
+
+    // Verify this child belongs to the requesting parent
+    const existing = await env.KUDDL_DB.prepare(
+      'SELECT id FROM children WHERE id = ? AND parent_id = ? LIMIT 1'
+    ).bind(childId, parentId).first();
+
+    if (!existing) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const childData = await request.json();
+
+    const updates = {};
+    if (childData.name)                                    updates.name                  = childData.name;
+    if (childData.dateOfBirth || childData.date_of_birth)  updates.date_of_birth         = childData.dateOfBirth || childData.date_of_birth;
+    if (childData.gender)                                  updates.gender                = childData.gender;
+    if (childData.medicalConditions !== undefined)         updates.medical_conditions    = childData.medicalConditions || null;
+    if (childData.allergies !== undefined)                 updates.allergies             = childData.allergies || null;
+    if (childData.dietaryRestrictions !== undefined)       updates.dietary_restrictions  = childData.dietaryRestrictions || null;
+    if (childData.specialNeeds !== undefined)              updates.special_needs         = childData.specialNeeds || null;
+    if (childData.bedtime !== undefined)                   updates.bedtime               = childData.bedtime || null;
+    if (childData.profile_picture !== undefined)           updates.profile_picture       = childData.profile_picture || null;
+
+    if (Object.keys(updates).length === 0) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Nothing to update' }), { headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = [...Object.values(updates), new Date().toISOString(), childId, parentId];
+
+    await env.KUDDL_DB.prepare(
+      `UPDATE children SET ${setClause}, updated_at = ? WHERE id = ? AND parent_id = ?`
+    ).bind(...values).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Child updated successfully' }), { headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('❌ Update child error:', error.message);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to update child: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }
 

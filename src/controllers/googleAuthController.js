@@ -55,11 +55,15 @@ export class GoogleAuthController {
 
       if (existingParent) {
         parentId = existingParent.id;
-        // Update name if it was a placeholder
+        // Update name and profile_picture (from Google) if available
         try {
+          const updates = ['fullname = ?', 'updated_at = ?'];
+          const vals = [fullName, new Date().toISOString()];
+          if (profilePicture) { updates.push('profile_picture = ?'); vals.push(profilePicture); }
+          vals.push(parentId);
           await this.db.prepare(
-            `UPDATE parents SET fullname = ?, updated_at = ? WHERE id = ?`
-          ).bind(fullName, new Date().toISOString(), parentId).run();
+            `UPDATE parents SET ${updates.join(', ')} WHERE id = ?`
+          ).bind(...vals).run();
         } catch (_) { /* non-critical */ }
       } else {
         // Create new parent using only core columns
@@ -83,8 +87,8 @@ export class GoogleAuthController {
         } catch (_) { /* ignore — fall through with '' */ }
 
         await this.db.prepare(
-          `INSERT INTO parents (id, phone, fullname, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
-        ).bind(parentId, phoneToInsert, fullName, email, now, now).run();
+          `INSERT INTO parents (id, phone, fullname, email, profile_picture, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(parentId, phoneToInsert, fullName, email, profilePicture || '', now, now).run();
       }
 
       // Best-effort: store google_id for future lookups (column added via migration)
