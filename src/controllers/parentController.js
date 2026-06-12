@@ -134,6 +134,15 @@ export async function getParentProfile(request, env) {
       ...webChildren.filter(c => !seenIds.has(c.id)),
     ];
 
+    // ── Sanitise placeholder phone before returning ────────────────────────
+    // Google-only signups have `phone='g:<googleId>'` (NOT NULL UNIQUE storage
+    // workaround). The UI should see an empty phone field instead — otherwise
+    // the placeholder ends up in the rendered profile and as the dial-pad
+    // value when the user goes to update.
+    if (parent && typeof parent.phone === 'string' && parent.phone.startsWith('g:')) {
+      parent.phone = '';
+    }
+
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       data: {
@@ -1199,5 +1208,142 @@ export async function uploadParentProfilePicture(request, env) {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     }));
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Delete a child profile
+//
+// Mirrors updateChild: verify the child belongs to the requesting parent
+// before issuing the destructive DELETE so a stolen / wrong childId can't
+// be used to remove someone else's record.
+//
+//   DELETE /api/parent/children/:id      (Authorization: Bearer <jwt>)
+// ──────────────────────────────────────────────────────────────────────────
+export async function deleteChild(request, env, childId) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Authorization token required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Invalid token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const decoded = jwt.decode(token);
+    const parentId = decoded.payload.id;
+
+    // Confirm ownership before deleting
+    const existing = await env.KUDDL_DB.prepare(
+      'SELECT id FROM children WHERE id = ? AND parent_id = ? LIMIT 1'
+    ).bind(childId, parentId).first();
+
+    if (!existing) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Child not found'
+      }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    await env.KUDDL_DB.prepare(
+      'DELETE FROM children WHERE id = ? AND parent_id = ?'
+    ).bind(childId, parentId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true, message: 'Child removed'
+    }), { headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('❌ Delete child error:', error.message);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false, message: 'Failed to delete child: ' + error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Upload a profile picture for a specific child
+//
+//   POST /api/parent/children/:id/upload-picture
+//   multipart/form-data with `file` (jpeg/png/webp, ≤5 MB)
+//   → { success, url }                — and sets children.profile_picture
+//
+// We deliberately do NOT reuse uploadParentProfilePicture here because
+// that handler writes to parents.profile_picture, which would clobber the
+// parent's avatar every time a child upload happened.
+// ──────────────────────────────────────────────────────────────────────────
+export async function uploadChildProfilePicture(request, env, childId) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Authorization required'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.decode(token);
+    if (!decoded?.payload?.id) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Invalid token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const parentId = decoded.payload.id;
+
+    // Verify ownership
+    const child = await env.KUDDL_DB.prepare(
+      'SELECT id FROM children WHERE id = ? AND parent_id = ? LIMIT 1'
+    ).bind(childId, parentId).first();
+    if (!child) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Child not found'
+      }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const formData = await request.formData();
+    const file = formData.get('file');
+    if (!file) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'No file provided'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'File size must be less than 5MB'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: 'Only JPEG, PNG, and WebP images are allowed'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const fileExtension = (file.name || 'jpg').split('.').pop();
+    const fileName = `children/${childId}/profile-${Date.now()}.${fileExtension}`;
+    await env.KUDDL_STORAGE.put(fileName, file.stream(), {
+      httpMetadata: { contentType: file.type },
+    });
+    const publicUrl = `${env.R2_PUBLIC_URL}/${fileName}`;
+
+    await env.KUDDL_DB.prepare(
+      'UPDATE children SET profile_picture = ?, updated_at = ? WHERE id = ? AND parent_id = ?'
+    ).bind(publicUrl, new Date().toISOString(), childId, parentId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true, url: publicUrl, message: 'Child picture uploaded'
+    }), { headers: { 'Content-Type': 'application/json' } }));
+
+  } catch (error) {
+    console.error('❌ Upload child picture error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false, message: 'Failed to upload picture: ' + error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }

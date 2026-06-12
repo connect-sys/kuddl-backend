@@ -6,6 +6,10 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import { generateId } from '../utils/helpers.js';
 import { sendNotification } from './notificationController.js';
+import {
+  sendCustomerBookingConfirmation,
+  sendPartnerBookingAlert,
+} from '../utils/mailer.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 
 // Create booking
@@ -395,6 +399,73 @@ export async function createBooking(request, env) {
       console.log('✅ Booking notification sent to partner');
     } catch (notificationError) {
       console.error('❌ Failed to send booking notification:', notificationError);
+    }
+
+    // ── Transactional emails — customer confirmation + partner alert ────────
+    // `service` upstream is currently a mock for the service-booking path —
+    // we re-query the real service + provider rows here so the emails carry
+    // the right name + the partner email. Each send is best-effort: a mail
+    // failure must not break the booking response.
+    try {
+      let realServiceName = service?.name || 'Kuddl Kin service';
+      let partnerEmail    = null;
+      let partnerName     = null;
+
+      try {
+        const svc = await env.KUDDL_DB.prepare(
+          'SELECT name FROM services WHERE id = ? LIMIT 1'
+        ).bind(serviceId).first();
+        if (svc?.name) realServiceName = svc.name;
+      } catch (_) { /* services lookup is best-effort */ }
+
+      try {
+        const prov = await env.KUDDL_DB.prepare(
+          'SELECT email, first_name, last_name, business_name FROM providers WHERE id = ? LIMIT 1'
+        ).bind(providerId).first();
+        if (prov) {
+          partnerEmail = prov.email || null;
+          partnerName  = prov.business_name
+            || [prov.first_name, prov.last_name].filter(Boolean).join(' ').trim()
+            || null;
+        }
+      } catch (_) { /* providers lookup is best-effort */ }
+
+      const customerEmail = bookingDetails.parentDetails?.email || '';
+      const customerName  = bookingDetails.parentDetails?.fullName
+        || bookingDetails.parentDetails?.name
+        || 'Customer';
+      const customerPhone = bookingDetails.parentDetails?.phone || '';
+
+      // Fire both — collect failures into the same log line so partial
+      // outages are easy to spot.
+      const [custRes, partRes] = await Promise.all([
+        sendCustomerBookingConfirmation(env, {
+          customerEmail, customerName,
+          serviceName: realServiceName,
+          partnerName,
+          bookingDate: selectedDate,
+          startTime, endTime,
+          totalAmount: baseAmount,
+          invoiceId,
+          bookingUrl: `https://kuddl.co/invoice/${invoiceId}`,
+        }),
+        sendPartnerBookingAlert(env, {
+          partnerEmail, partnerName,
+          customerName, customerPhone,
+          serviceName: realServiceName,
+          bookingDate: selectedDate,
+          startTime, endTime,
+          totalAmount: baseAmount,
+          bookingId,
+          dashboardUrl: 'https://partner.kuddl.co/bookings',
+        }),
+      ]);
+      console.log(
+        `📧 Booking emails — customer:${custRes.ok ? 'sent' : 'skip:'+custRes.error}` +
+        ` partner:${partRes.ok ? 'sent' : 'skip:'+partRes.error}`
+      );
+    } catch (mailErr) {
+      console.error('📧 Booking email pipeline error:', mailErr?.message);
     }
 
     return addCorsHeaders(new Response(JSON.stringify({

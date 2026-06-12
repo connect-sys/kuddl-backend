@@ -2866,6 +2866,14 @@ router.put('/api/parent/children/:id', async (request, env) => {
   return parentController.updateChild(request, env, request.params.id);
 });
 
+router.delete('/api/parent/children/:id', async (request, env) => {
+  return parentController.deleteChild(request, env, request.params.id);
+});
+
+router.post('/api/parent/children/:id/upload-picture', async (request, env) => {
+  return parentController.uploadChildProfilePicture(request, env, request.params.id);
+});
+
 router.get('/api/parent/bookings', async (request, env) => {
   return parentController.getParentBookings(request, env);
 });

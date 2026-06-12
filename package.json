@@ -4,8 +4,8 @@
   "description": "Kuddl Platform Backend - Cloudflare Workers",
   "main": "server.js",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy --env development",
+    "dev": "wrangler dev --env development",
+    "deploy": "node -e \"console.error('\\n  ERROR: Use npm run deploy:dev OR npm run deploy:production.\\n  Bare deploys are blocked because they used to rebind api.kuddl.co to kuddl-dev.\\n'); process.exit(1)\"",
     "deploy:dev": "wrangler deploy --env development",
     "deploy:production": "wrangler deploy --env production",
     "build": "echo 'Build completed - Wrangler will handle bundling during deployment'",
@@ -24,14 +24,15 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.450.0",
     "@aws-sdk/s3-request-presigner": "^3.450.0",
-"@google-cloud/vision": "^4.0.0",
+    "@google-cloud/vision": "^4.0.0",
     "@tsndr/cloudflare-worker-jwt": "^2.4.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "itty-router": "^4.0.13",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "worker-mailer": "^1.2.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20231025.0",

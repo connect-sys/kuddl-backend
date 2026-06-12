@@ -111,6 +111,21 @@ export class GoogleAuthController {
         exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60),
       }, jwtSecret);
 
+      // ── Mask placeholder phone before returning ──────────────────────────
+      // The phone column is NOT NULL UNIQUE on parents. For Google sign-ups
+      // we have no real phone yet so we store `g:<googleId>` as a unique
+      // placeholder. The UI must never see that string — return empty
+      // instead so the partner / parent profile screen shows a blank phone
+      // field the user can fill in later.
+      let visiblePhone = '';
+      try {
+        const row = await this.db.prepare(
+          `SELECT phone FROM parents WHERE id = ?`
+        ).bind(parentId).first();
+        const raw = row?.phone || '';
+        visiblePhone = raw.startsWith('g:') ? '' : raw;
+      } catch (_) { /* fall through with '' */ }
+
       return json({
         success: true,
         message: isNewUser ? 'Account created successfully' : 'Login successful',
@@ -118,6 +133,7 @@ export class GoogleAuthController {
         user: {
           id: parentId,
           email,
+          phone: visiblePhone,
           first_name: fName,
           last_name: lName,
           full_name: fullName,

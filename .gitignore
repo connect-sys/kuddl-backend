@@ -12,6 +12,11 @@ pnpm-debug.log*
 .env.test.local
 .env.production.local
 
+# Wrangler local secret bindings — NEVER commit (real credentials live here
+# during `wrangler dev`; production reads from `wrangler secret put …`)
+.dev.vars
+.dev.vars.*
+
 # Build outputs
 dist/
 build/

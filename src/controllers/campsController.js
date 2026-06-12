@@ -2,6 +2,10 @@ import { addCorsHeaders } from '../utils/cors.js';
 import { generateId } from '../utils/helpers.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 import { insertBatch } from './batchesController.js';
+import {
+  sendCustomerBookingConfirmation,
+  sendPartnerBookingAlert,
+} from '../utils/mailer.js';
 
 // Initialize all camps-related tables and seed data
 export async function initializeCampsTables(request, env) {
@@ -600,6 +604,68 @@ export async function bookCamp(request, env) {
     await env.KUDDL_DB.prepare(`
       UPDATE camps SET current_enrolled = current_enrolled + 1, updated_at = datetime('now') WHERE id = ?
     `).bind(camp_id).run();
+
+    // ── Transactional emails — best-effort, never block response ──────────
+    try {
+      // Pull partner email + parent email separately so a failure on one
+      // lookup doesn't sink the other.
+      let partnerEmail = null, partnerName = null;
+      let customerEmail = '', customerName = '', customerPhone = '';
+
+      try {
+        const prov = await env.KUDDL_DB.prepare(
+          'SELECT email, first_name, last_name, business_name FROM providers WHERE id = ? LIMIT 1'
+        ).bind(camp.provider_id).first();
+        if (prov) {
+          partnerEmail = prov.email || null;
+          partnerName  = prov.business_name
+            || [prov.first_name, prov.last_name].filter(Boolean).join(' ').trim()
+            || null;
+        }
+      } catch (_) {}
+
+      try {
+        const par = await env.KUDDL_DB.prepare(
+          'SELECT email, fullname, phone FROM parents WHERE id = ? LIMIT 1'
+        ).bind(parentId).first();
+        if (par) {
+          customerEmail = par.email || '';
+          customerName  = par.fullname || child_name || 'Customer';
+          customerPhone = (par.phone || '').startsWith('g:') ? '' : (par.phone || '');
+        }
+      } catch (_) {}
+
+      const [custRes, partRes] = await Promise.all([
+        sendCustomerBookingConfirmation(env, {
+          customerEmail, customerName,
+          serviceName: camp.title,
+          partnerName,
+          bookingDate: selected_start_date,
+          startTime: selected_start_date === selected_end_date ? '' : `${selected_start_date} → ${selected_end_date}`,
+          endTime: '',
+          totalAmount,
+          invoiceId,
+          bookingUrl: `https://kuddl.co/invoice/${invoiceId}`,
+        }),
+        sendPartnerBookingAlert(env, {
+          partnerEmail, partnerName,
+          customerName, customerPhone,
+          serviceName: camp.title,
+          bookingDate: selected_start_date,
+          startTime: selected_start_date === selected_end_date ? '' : `${selected_start_date} → ${selected_end_date}`,
+          endTime: '',
+          totalAmount,
+          bookingId,
+          dashboardUrl: 'https://partner.kuddl.co/bookings',
+        }),
+      ]);
+      console.log(
+        `📧 Camp emails — customer:${custRes.ok ? 'sent' : 'skip:'+custRes.error}` +
+        ` partner:${partRes.ok ? 'sent' : 'skip:'+partRes.error}`
+      );
+    } catch (mailErr) {
+      console.error('📧 Camp email pipeline error:', mailErr?.message);
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
