@@ -140,12 +140,23 @@ export async function sendProductionOTP(request, env) {
       const twilioAuthToken = env.TWILIO_AUTH_TOKEN;
       const messagingServiceSid = env.TWILIO_MESSAGING_SERVICE_SID;
 
+      // Hard guard: the production API must NEVER run in test mode (which would
+      // return the OTP in the response instead of sending an SMS). We key off the
+      // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
+      // can't re-enable the leak on prod.
+      const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
+      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddl.co';
+
       // Check if we're in test mode or if Twilio credentials are missing
-      const isTestMode = env.TWILIO_TEST_MODE === 'true';
+      const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;
       const hasValidCredentials = twilioAccountSid && twilioAuthToken && messagingServiceSid;
 
-      if (isTestMode || !hasValidCredentials) {
-        console.log('🔧 Test mode or missing Twilio credentials - OTP stored but SMS not sent');
+      // Only expose the OTP in the API response when explicitly running in test
+      // mode (development / staging). In production we must NEVER return the OTP
+      // to the caller — missing Twilio credentials are a misconfiguration, not a
+      // green light to leak the code.
+      if (isTestMode) {
+        console.log('🔧 Test mode - OTP stored but SMS not sent');
         console.log(`📱 OTP for ${formattedPhone}: ${otp}`);
 
         return addCorsHeaders(new Response(JSON.stringify({
@@ -155,6 +166,24 @@ export async function sendProductionOTP(request, env) {
           otp: otp // Only include OTP in test mode for testing
         }), {
           status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        }));
+      }
+
+      // Not in test mode but Twilio is not configured → fail loudly instead of
+      // leaking the OTP. Remove the stored OTP so it can't be misused.
+      if (!hasValidCredentials) {
+        console.error('❌ Twilio credentials are not configured in this environment - cannot send OTP SMS');
+
+        await env.KUDDL_DB.prepare(
+          'DELETE FROM otp_verifications WHERE phone = ? AND otp = ?'
+        ).bind(formattedPhone, otp).run();
+
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'OTP service is temporarily unavailable. Please try again later.'
+        }), {
+          status: 503,
           headers: { 'Content-Type': 'application/json' }
         }));
       }
@@ -467,12 +496,23 @@ export async function sendPartnerProductionOTP(request, env) {
       const twilioAuthToken = env.TWILIO_AUTH_TOKEN;
       const messagingServiceSid = env.TWILIO_MESSAGING_SERVICE_SID;
 
+      // Hard guard: the production API must NEVER run in test mode (which would
+      // return the OTP in the response instead of sending an SMS). We key off the
+      // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
+      // can't re-enable the leak on prod.
+      const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
+      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddl.co';
+
       // Check if we're in test mode or if Twilio credentials are missing
-      const isTestMode = env.TWILIO_TEST_MODE === 'true';
+      const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;
       const hasValidCredentials = twilioAccountSid && twilioAuthToken && messagingServiceSid;
 
-      if (isTestMode || !hasValidCredentials) {
-        console.log('🔧 Test mode or missing Twilio credentials - Partner OTP stored but SMS not sent');
+      // Only expose the OTP in the API response when explicitly running in test
+      // mode (development / staging). In production we must NEVER return the OTP
+      // to the caller — missing Twilio credentials are a misconfiguration, not a
+      // green light to leak the code.
+      if (isTestMode) {
+        console.log('🔧 Test mode - Partner OTP stored but SMS not sent');
         console.log(`📱 Partner OTP for ${formattedPhone}: ${otp}`);
 
         return addCorsHeaders(new Response(JSON.stringify({
@@ -482,6 +522,24 @@ export async function sendPartnerProductionOTP(request, env) {
           otp: otp // Only include OTP in test mode for testing
         }), {
           status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        }));
+      }
+
+      // Not in test mode but Twilio is not configured → fail loudly instead of
+      // leaking the OTP. Remove the stored OTP so it can't be misused.
+      if (!hasValidCredentials) {
+        console.error('❌ Twilio credentials are not configured in this environment - cannot send partner OTP SMS');
+
+        await env.KUDDL_DB.prepare(
+          'DELETE FROM otp_verifications WHERE phone = ? AND otp = ?'
+        ).bind(formattedPhone, otp).run();
+
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'OTP service is temporarily unavailable. Please try again later.'
+        }), {
+          status: 503,
           headers: { 'Content-Type': 'application/json' }
         }));
       }
