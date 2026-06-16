@@ -196,10 +196,18 @@ export async function createCamp(request, env) {
       } catch { /* leave null */ }
     }
 
-    if (!title || !camp_type || !start_date || !end_date || !max_members || !price) {
+    if (!title || !camp_type || !start_date || !end_date || !max_members) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'title, camp_type, start_date, end_date, max_members and price are required'
+        message: 'title, camp_type, start_date, end_date and max_members are required'
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Allow free camps (price 0). Only reject missing/negative/non-numeric prices.
+    if (price === undefined || price === null || price === '' || isNaN(Number(price)) || Number(price) < 0) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Valid price is required (0 or greater)'
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 

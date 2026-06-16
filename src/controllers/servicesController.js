@@ -416,7 +416,7 @@ export async function createService(request, env) {
     console.log('🔍 DEBUGGING - Raw serviceData.category_id:', serviceData.category_id);
     console.log('🔍 DEBUGGING - All serviceData keys:', Object.keys(serviceData));
   
-    if (!name || !category_id || !price_type || !price) {
+    if (!name || !category_id || !price_type) {
 
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
@@ -440,11 +440,12 @@ export async function createService(request, env) {
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    if (!price || price <= 0) {
+    // Allow free services (price 0). Only reject missing/negative/non-numeric prices.
+    if (price === undefined || price === null || price === '' || isNaN(Number(price)) || Number(price) < 0) {
       console.log('❌ Valid price is required');
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'Valid price is required'
+        message: 'Valid price is required (0 or greater)'
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
