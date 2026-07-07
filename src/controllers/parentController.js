@@ -1199,3 +1199,85 @@ export async function uploadParentProfilePicture(request, env) {
     }));
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delete the signed-in customer's account (App Store Guideline 5.1.1(v)).
+// Removes the parent/user record, profile, children and saved data, then the
+// app clears the local token. Handles both OTP customers (parents table) and
+// email/password customers (users table). Best-effort per table so a missing
+// optional table never blocks the deletion.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function deleteParentAccount(request, env) {
+  try {
+    let tokenId = null;
+    let tokenPhone = null;
+
+    const authHeader = request.headers.get('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded && decoded.payload) {
+          tokenId = decoded.payload.id;
+          tokenPhone = decoded.payload.phone;
+        }
+      } catch (e) {
+        console.log('⚠️ delete-account token decode failed:', e.message);
+      }
+    }
+
+    if (!tokenId && !tokenPhone) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Authorization required',
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Resolve the phone (last 10 digits) so we catch records stored in various
+    // formats (+91…, 91…, bare 10-digit).
+    let phone = tokenPhone;
+    if (!phone && tokenId) {
+      const row = await env.KUDDL_DB.prepare(`SELECT phone FROM parents WHERE id = ?`).bind(tokenId).first().catch(() => null);
+      if (row) phone = row.phone;
+    }
+    const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
+    const phone10 = phoneDigits.length > 10 ? phoneDigits.slice(-10) : phoneDigits;
+
+    // Collect every parent id belonging to this user (by id and by phone).
+    const parentIds = new Set();
+    if (tokenId) parentIds.add(tokenId);
+    if (phone10) {
+      const rows = await env.KUDDL_DB.prepare(`
+        SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?
+      `).bind(`%${phone10}`, phone10, phone || '').all().catch(() => ({ results: [] }));
+      (rows?.results || []).forEach(r => parentIds.add(r.id));
+    }
+
+    const safeRun = async (sql, binds) => {
+      try { await env.KUDDL_DB.prepare(sql).bind(...binds).run(); }
+      catch (e) { console.log('⚠️ delete step skipped:', sql, e.message); }
+    };
+
+    // Delete children + parent rows for each id, plus any user-uploaded data.
+    for (const id of parentIds) {
+      await safeRun(`DELETE FROM children WHERE parent_id = ?`, [id]);
+      await safeRun(`DELETE FROM bookmarks WHERE parent_id = ?`, [id]);
+      await safeRun(`DELETE FROM parents WHERE id = ?`, [id]);
+    }
+
+    // Email/password customers live in the users table.
+    if (tokenId) await safeRun(`DELETE FROM users WHERE id = ?`, [tokenId]);
+    if (phone10) await safeRun(`DELETE FROM users WHERE phone LIKE ? OR phone LIKE ? OR phone = ?`, [`%${phone10}`, phone10, phone || '']);
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Account deleted successfully.',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('❌ deleteParentAccount error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Error deleting account: ' + error.message,
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}

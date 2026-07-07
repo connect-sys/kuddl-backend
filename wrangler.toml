@@ -82,7 +82,7 @@ name = "kuddl-backend-prod"
 workers_dev = false
 
 routes = [
-  { pattern = "api.kuddl.co/*", zone_name = "kuddl.co" }
+  { pattern = "api.kuddlkin.co/*", zone_name = "kuddl.co" }
 ]
 
 [env.production.vars]

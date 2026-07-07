@@ -145,7 +145,7 @@ export async function sendProductionOTP(request, env) {
       // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
       // can't re-enable the leak on prod.
       const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
-      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddl.co';
+      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddlkin.co';
 
       // Check if we're in test mode or if Twilio credentials are missing
       const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;
@@ -501,7 +501,7 @@ export async function sendPartnerProductionOTP(request, env) {
       // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
       // can't re-enable the leak on prod.
       const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
-      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddl.co';
+      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddlkin.co';
 
       // Check if we're in test mode or if Twilio credentials are missing
       const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;

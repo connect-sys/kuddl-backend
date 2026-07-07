@@ -2850,6 +2850,15 @@ router.put('/api/parent/profile', async (request, env) => {
   return parentController.updateParentProfile(request, env);
 });
 
+// Account deletion (App Store Guideline 5.1.1(v)). Multiple verbs/paths so the
+// customer app's delete call resolves regardless of which alias it uses.
+router.delete('/api/parent/account', async (request, env) => parentController.deleteParentAccount(request, env));
+router.post('/api/parent/account', async (request, env) => parentController.deleteParentAccount(request, env));
+router.delete('/api/customers/account', async (request, env) => parentController.deleteParentAccount(request, env));
+router.post('/api/customers/account', async (request, env) => parentController.deleteParentAccount(request, env));
+router.delete('/api/user/delete-account', async (request, env) => parentController.deleteParentAccount(request, env));
+router.post('/api/user/delete-account', async (request, env) => parentController.deleteParentAccount(request, env));
+
 router.post('/api/parent/upload-profile-picture', async (request, env) => {
   return parentController.uploadParentProfilePicture(request, env);
 });

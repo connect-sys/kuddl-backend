@@ -226,15 +226,42 @@ export async function loginCustomer(request, env) {
       // Continue login process, don't block user
     }
 
+    // Ensure a parents table record exists so /api/parent/profile works
+    try {
+      const existingParent = await env.KUDDL_DB.prepare(
+        'SELECT id FROM parents WHERE id = ? OR email = ?'
+      ).bind(customer.id, customer.email).first();
+
+      if (!existingParent) {
+        const fullName = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || customer.email.split('@')[0];
+        const phone = customer.phone || `+91${Date.now().toString().slice(-10)}`;
+        await env.KUDDL_DB.prepare(`
+          INSERT OR IGNORE INTO parents (id, phone, email, fullname, is_verified, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, 1, ?, ?)
+        `).bind(
+          customer.id,
+          phone,
+          customer.email,
+          fullName,
+          new Date().toISOString(),
+          new Date().toISOString()
+        ).run();
+      }
+    } catch (parentError) {
+      console.error('⚠️ Failed to ensure parents record on login:', parentError);
+    }
+
     // Update last login
     await env.KUDDL_DB.prepare(
       'UPDATE users SET last_login_at = ? WHERE id = ?'
     ).bind(new Date().toISOString(), customer.id).run();
 
-    // Generate JWT token
+    // Generate JWT token — include phone so /api/parent/profile can look up parents by phone
+    const parentRow = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ? OR email = ?').bind(customer.id, customer.email).first();
     const token = await jwt.sign({
       id: customer.id,
       email: customer.email,
+      phone: parentRow?.phone,
       role: 'customer',
       exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
     }, env.JWT_SECRET);
