@@ -4,6 +4,56 @@
  */
 
 /**
+ * Asset hosts that were retired when the kuddl.co zone was replaced by
+ * kuddlkin.co. The objects never moved — only the public hostname changed —
+ * but absolute URLs built from the old hostname are still stored in the
+ * database, and those hostnames no longer resolve (NXDOMAIN).
+ *
+ * The mapping is explicit (old host -> new host) rather than "rewrite to
+ * whatever R2_PUBLIC_URL currently is", so a dev deployment can never rewrite a
+ * prod URL onto the dev bucket.
+ */
+export const LEGACY_ASSET_HOSTS = {
+  'https://prodassets.kuddl.co': 'https://prodassets.kuddlkin.co',
+  'https://devassets.kuddl.co': 'https://devassets.kuddlkin.co',
+  'https://dev-assets.kuddl.co': 'https://devassets.kuddlkin.co',
+};
+
+/**
+ * Rewrite any retired asset hostname in a string to its live equivalent.
+ * Safe on arbitrary text: if no legacy host appears, the input is returned as-is.
+ * @param {string} text
+ * @returns {string}
+ */
+export function rewriteLegacyAssetHosts(text) {
+  if (!text || typeof text !== 'string') return text;
+  let out = text;
+  for (const [oldHost, newHost] of Object.entries(LEGACY_ASSET_HOSTS)) {
+    if (out.includes(oldHost)) out = out.split(oldHost).join(newHost);
+  }
+  return out;
+}
+
+/**
+ * Strip any known public asset hostname off a URL to recover the R2 object key.
+ * Tolerates the current R2_PUBLIC_URL *and* every retired hostname, so images
+ * uploaded before the domain change can still be located in the bucket.
+ * @param {string} url
+ * @param {Object} env
+ * @returns {string} the R2 key (or the original string if it wasn't a known URL)
+ */
+export function toR2Key(url, env) {
+  if (!url || typeof url !== 'string') return url;
+  const hosts = [env?.R2_PUBLIC_URL, ...Object.keys(LEGACY_ASSET_HOSTS), ...Object.values(LEGACY_ASSET_HOSTS)]
+    .filter(Boolean);
+  for (const host of hosts) {
+    const prefix = host.endsWith('/') ? host : host + '/';
+    if (url.startsWith(prefix)) return url.slice(prefix.length);
+  }
+  return url;
+}
+
+/**
  * Convert R2 internal path to public URL
  * @param {string} filePath - The internal R2 file path
  * @param {Object} env - Environment variables

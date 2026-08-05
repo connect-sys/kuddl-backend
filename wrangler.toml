@@ -32,11 +32,11 @@ port = 8787
 [vars]
 ENVIRONMENT = "development"
 TWILIO_TEST_MODE = "true"
-R2_PUBLIC_URL = "https://devassets.kuddl.co"
+R2_PUBLIC_URL = "https://devassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "true"
-FRONTEND_URL = "https://partner.kuddl.co"
+FRONTEND_URL = "https://partner.kuddlkin.co"
 
 # Default D1 Database Bindings (Development)
 [[d1_databases]]
@@ -61,11 +61,11 @@ routes = [
 [env.development.vars]
 ENVIRONMENT = "development"
 TWILIO_TEST_MODE = "true"
-R2_PUBLIC_URL = "https://devassets.kuddl.co"
+R2_PUBLIC_URL = "https://devassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "true"
-FRONTEND_URL = "https://dev.partner.kuddl.co"
+FRONTEND_URL = "https://dev.partner.kuddlkin.co"
 
 [[env.development.d1_databases]]
 binding = "KUDDL_DB"
@@ -82,17 +82,17 @@ name = "kuddl-backend-prod"
 workers_dev = false
 
 routes = [
-  { pattern = "api.kuddlkin.co/*", zone_name = "kuddl.co" }
+  { pattern = "api.kuddlkin.co/*", zone_name = "kuddlkin.co" }
 ]
 
 [env.production.vars]
 ENVIRONMENT = "production"
 TWILIO_TEST_MODE = "false"
-R2_PUBLIC_URL = "https://prodassets.kuddl.co"
+R2_PUBLIC_URL = "https://prodassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
 SANDBOX_API_TEST_MODE = "false"
-FRONTEND_URL = "https://partner.kuddl.co"
+FRONTEND_URL = "https://partner.kuddlkin.co"
 
 [[env.production.d1_databases]]
 binding = "KUDDL_DB"

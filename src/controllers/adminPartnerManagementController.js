@@ -1,6 +1,30 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 
+/**
+ * True only for a valid admin JWT.
+ * NOTE: `jwt.verify()` resolves to a boolean — the claims come from `jwt.decode()`.
+ * Accepts both admin conventions used in this codebase (role claim, or the admin
+ * email) so existing admin tokens keep working.
+ */
+async function isAdminRequest(request, env) {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
+  const token = authHeader.substring(7);
+  try {
+    if (!(await jwt.verify(token, env.JWT_SECRET))) return false;
+    const payload = jwt.decode(token)?.payload || {};
+    return payload.role === 'admin' || payload.email === 'admin@kuddl.co';
+  } catch {
+    return false;
+  }
+}
+
+const forbidden = () => addCorsHeaders(new Response(JSON.stringify({
+  success: false,
+  message: 'Admin access required',
+}), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+
 // Get partner info
 export async function getPartnerInfo(request, env) {
   try {
@@ -125,6 +149,9 @@ export async function getPartnerCamps(request, env) {
 // Delete partner camp
 export async function deletePartnerCamp(request, env) {
   try {
+    // This route was previously unauthenticated — anyone could delete any camp.
+    if (!(await isAdminRequest(request, env))) return forbidden();
+
     const url = new URL(request.url);
     const pathParts = url.pathname.split('/');
     const campId = pathParts[pathParts.length - 1];

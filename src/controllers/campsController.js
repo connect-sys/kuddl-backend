@@ -196,10 +196,10 @@ export async function createCamp(request, env) {
       } catch { /* leave null */ }
     }
 
-    if (!title || !camp_type || !start_date || !end_date || !max_members) {
+    if (!title || !camp_type || !start_date || !max_members) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'title, camp_type, start_date, end_date and max_members are required'
+        message: 'title, camp_type, start_date and max_members are required'
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
@@ -211,9 +211,12 @@ export async function createCamp(request, env) {
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    const start = new Date(start_date);
-    const end = new Date(end_date);
-    const durationDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    // end_date is optional. An open-ended camp stores '' (the column is NOT NULL)
+    // and has no fixed duration.
+    const resolvedEndDate = end_date || '';
+    const durationDays = resolvedEndDate
+      ? Math.ceil((new Date(resolvedEndDate) - new Date(start_date)) / (1000 * 60 * 60 * 24)) + 1
+      : null;
 
     const campId = `camp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     await env.KUDDL_DB.prepare(`
@@ -227,7 +230,7 @@ export async function createCamp(request, env) {
     `).bind(
       campId, providerId, title, description || '', camp_type,
       category_id || null, subcategory_id || null,
-      start_date, end_date, durationDays,
+      start_date, resolvedEndDate, durationDays,
       schedule_time || schedule_start_time || null, schedule_days || null,
       parseInt(max_members), parseFloat(price), price_type || 'camp',
       parseInt(age_min) || 4, parseInt(age_max) || 16,
@@ -267,7 +270,7 @@ export async function createCamp(request, env) {
           ? f.schedules[0]
           : {
               start_date,
-              end_date,
+              end_date: resolvedEndDate,
               start_time: schedule_start_time || schedule_time || null,
               end_time: schedule_end_time || null,
             };
@@ -414,7 +417,7 @@ export async function getPublicCamps(request, env) {
       FROM camps c
       JOIN providers p ON c.provider_id = p.id
       WHERE c.status = 'active'
-        AND c.end_date >= date('now')
+        AND (COALESCE(c.end_date, '') = '' OR c.end_date >= date('now'))
     `;
     const params = [];
 

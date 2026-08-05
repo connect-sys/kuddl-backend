@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs';
 import { addCorsHeaders } from '../utils/cors.js';
 import { getPublicR2Url } from '../utils/r2Utils.js';
 import { insertBatch } from './batchesController.js';
+import { extractServiceExtras } from '../utils/helpers.js';
 
 // Get service categories endpoint
 export async function getServiceCategories(request, env) {
@@ -77,9 +78,10 @@ export async function getServices(request, env) {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
-    
-    if (!decoded) {
+    // `verify()` resolves to a boolean — the claims come from `decode()`.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+
+    if (!isValid) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: true,
         data: [] // Return empty array instead of error
@@ -87,6 +89,8 @@ export async function getServices(request, env) {
         headers: { 'Content-Type': 'application/json' }
       }));
     }
+
+    const payload = jwt.decode(token)?.payload || {};
 
     // Check if services table exists, if not return empty array
     try {
@@ -104,21 +108,21 @@ export async function getServices(request, env) {
       }
 
       // Get provider ID with same fallback logic as service creation
-      let providerId = decoded.id || decoded.user_id || decoded.userId || decoded.sub;
-      
+      let providerId = payload.id || payload.user_id || payload.userId || payload.sub;
+
       // If still no ID, check if it's nested in user object
-      if (!providerId && decoded.user) {
-        providerId = decoded.user.id || decoded.user.user_id || decoded.user.userId;
+      if (!providerId && payload.user) {
+        providerId = payload.user.id || payload.user.user_id || payload.user.userId;
       }
-      
+
       // If still no provider ID, try to find it using email from JWT
-      if (!providerId && decoded.email) {
-        console.log('🔍 No ID in JWT for services, trying to find provider by email:', decoded.email);
+      if (!providerId && payload.email) {
+        console.log('🔍 No ID in JWT for services, trying to find provider by email:', payload.email);
         try {
           const providerByEmail = await env.KUDDL_DB.prepare(`
             SELECT id FROM providers WHERE email = ?
-          `).bind(decoded.email).first();
-          
+          `).bind(payload.email).first();
+
           if (providerByEmail) {
             providerId = providerByEmail.id;
             console.log('✅ Found provider ID by email for services:', providerId);
@@ -127,23 +131,17 @@ export async function getServices(request, env) {
           console.error('❌ Error finding provider by email for services:', error);
         }
       }
-      
-      // Final fallback: get any active partner from database
-      if (!providerId) {
-        try {
-          const activePartner = await env.KUDDL_DB.prepare(`
-            SELECT id FROM providers WHERE is_active = 1 AND kyc_status = 'verified' LIMIT 1
-          `).first();
-          
-          if (activePartner) {
-            providerId = activePartner.id;
-            console.log('✅ Using active partner ID as fallback for services:', providerId);
-          }
-        } catch (error) {
-          console.error('❌ Error getting active partner for services:', error);
-        }
-      }
 
+      // NOTE: there used to be a "final fallback" here that grabbed an arbitrary
+      // active partner (`WHERE is_active = 1 ... LIMIT 1`) when the token yielded no
+      // id — which served ANOTHER partner's services to the caller. Fail closed instead.
+      if (!providerId) {
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: 'Unable to identify provider from token. Please login again.',
+          data: []
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+      }
 
       // Query for partner's services with category details
       const query = `
@@ -228,30 +226,18 @@ export async function getMyServices(request, env) {
     const payload = decoded.payload || decoded;
     let providerId = payload.id || payload.sub || payload.userId || payload.provider_id;
     
+    // Fail closed. (There used to be an unreachable "grab any active partner"
+    // fallback below this — a landmine that would have served another partner's
+    // services if this guard were ever reordered. Removed.)
     if (!providerId) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Invalid token: Provider ID not found. Please login again.',
-        data: [],
-        debug: { payload }
+        data: []
       }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
       }));
-    }
-    
-    // Final fallback: get any active partner from database
-    if (!providerId) {
-      try {
-        const activePartner = await env.KUDDL_DB.prepare(`
-          SELECT id FROM providers WHERE is_active = 1 AND kyc_status = 'verified' LIMIT 1
-        `).first();
-        if (activePartner) {
-          providerId = activePartner.id;
-        }
-      } catch (error) {
-        // error getting active partner
-      }
     }
 
     // Verify provider exists
@@ -544,8 +530,8 @@ export async function createService(request, env) {
         id, provider_id, category_id, subcategory_id, name, slug, description,
         price_type, price, duration_minutes, special_requirements, cancellation_policy,
         features, available_pincodes, image_urls, primary_image_url,
-        status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        partner_approved, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Prepare image URLs for database
@@ -571,6 +557,7 @@ export async function createService(request, env) {
       JSON.stringify(Array.isArray(available_pincodes) ? available_pincodes : []),
       imageUrlsJson,
       primaryImageUrl,
+      0, // partner_approved: new services start unapproved — partner must approve before customers see them
       requestStatus || 'active', // Use status from request or default to 'active'
       new Date().toISOString(),
       new Date().toISOString()
@@ -665,10 +652,13 @@ export async function addProvider(request, env) {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
-    
-    // Check if user is admin
-    if (!decoded || decoded.email !== 'admin@kuddl.co') {
+    // `verify()` resolves to a boolean — the claims come from `decode()`, so the
+    // old `decoded.email` check compared `undefined` and always rejected.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    const payload = isValid ? (jwt.decode(token)?.payload || {}) : {};
+
+    // Check if user is admin (accept either convention used in this codebase)
+    if (!isValid || (payload.role !== 'admin' && payload.email !== 'admin@kuddl.co')) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Admin access required'
@@ -967,9 +957,10 @@ export async function getPublicServices(request, env) {
         FROM services s
         LEFT JOIN categories c ON s.category_id = c.id
         LEFT JOIN providers p ON s.provider_id = p.id
-        WHERE COALESCE(s.is_verified, 0) = 1
+        WHERE s.status = 'active'
+          AND COALESCE(s.partner_approved, 1) = 1
       `;
-      
+
       const params = [];
 
       if (pincode) {
@@ -1048,6 +1039,8 @@ export async function getPublicServices(request, env) {
           duration: service.duration_minutes,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : {},
+          // Customer-facing extras extracted from features (display-only).
+          ...extractServiceExtras(service.features),
           availablePincodes: service.available_pincodes ? (typeof service.available_pincodes === 'string' ? JSON.parse(service.available_pincodes) : service.available_pincodes) : [],
           available_pincodes: service.available_pincodes ? (typeof service.available_pincodes === 'string' ? JSON.parse(service.available_pincodes) : service.available_pincodes) : [],
           // Image fields - provide both formats for compatibility
@@ -1201,28 +1194,33 @@ export async function deleteService(request, env) {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
-    
-    if (!decoded) {
+
+    // NOTE: @tsndr/cloudflare-worker-jwt `verify()` resolves to a BOOLEAN, not the
+    // payload — reading `.id` off it always gave undefined, which made every delete
+    // fall through to an arbitrary "first active partner" and 403 the real owner.
+    // Verify for authenticity, then `decode()` for the actual claims.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Invalid or expired token'
       }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    // Get provider ID with same fallback logic
-    let providerId = decoded.id || decoded.user_id || decoded.userId || decoded.sub;
-    
-    if (!providerId && decoded.user) {
-      providerId = decoded.user.id || decoded.user.user_id || decoded.user.userId;
+    const payload = jwt.decode(token)?.payload || {};
+    const isAdmin = payload.role === 'admin';
+    let providerId = payload.id || payload.user_id || payload.userId || payload.sub;
+
+    if (!providerId && payload.user) {
+      providerId = payload.user.id || payload.user.user_id || payload.user.userId;
     }
-    
-    if (!providerId && decoded.email) {
+
+    if (!providerId && payload.email) {
       try {
         const providerByEmail = await env.KUDDL_DB.prepare(`
           SELECT id FROM providers WHERE email = ?
-        `).bind(decoded.email).first();
-        
+        `).bind(payload.email).first();
+
         if (providerByEmail) {
           providerId = providerByEmail.id;
         }
@@ -1230,22 +1228,10 @@ export async function deleteService(request, env) {
         console.error('❌ Error finding provider by email for delete:', error);
       }
     }
-    
-    if (!providerId) {
-      try {
-        const activePartner = await env.KUDDL_DB.prepare(`
-          SELECT id FROM providers WHERE is_active = 1 AND kyc_status = 'verified' LIMIT 1
-        `).first();
-        
-        if (activePartner) {
-          providerId = activePartner.id;
-        }
-      } catch (error) {
-        console.error('❌ Error getting active partner for delete:', error);
-      }
-    }
 
-    if (!providerId) {
+    // Admins act without a provider identity; partners must resolve to one.
+    // (Never fall back to "some active partner" — that impersonates a real account.)
+    if (!providerId && !isAdmin) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Unable to identify provider'
@@ -1264,7 +1250,8 @@ export async function deleteService(request, env) {
       }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    if (service.provider_id !== providerId) {
+    // Admins can delete any service; partners only their own.
+    if (!isAdmin && service.provider_id !== providerId) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'You can only delete your own services'
@@ -1439,6 +1426,7 @@ export async function getPublicServiceById(request, env) {
       JOIN providers p ON s.provider_id = p.id
       LEFT JOIN categories c ON s.category_id = c.id
       WHERE s.id = ? AND s.status = 'active' AND p.is_active = 1 AND p.kyc_status = 'verified'
+        AND COALESCE(s.partner_approved, 1) = 1
     `).bind(serviceId).first();
 
     if (!service) {
@@ -1566,6 +1554,8 @@ export async function getPublicServiceById(request, env) {
       price: service.price,
       duration: service.duration_minutes,
       features: service.features ? JSON.parse(service.features) : {},
+      // Customer-facing extras (trial offer, one-time registration fee, daycare) — display-only.
+      ...extractServiceExtras(service.features),
       availablePincodes: service.available_pincodes ? JSON.parse(service.available_pincodes) : [],
       provider: {
         id: service.provider_id,
@@ -1823,14 +1813,19 @@ export async function updateService(request, env) {
     // Whitelisted editable columns. Previously this endpoint only set `status`,
     // which silently dropped every other field the form sent — that's why edits
     // appeared to "do nothing" in the admin portal.
+    // NOTE: age_group_min / age_group_max / max_children are NOT columns on
+    // `services` — the wizard persists them inside `features` (age_min/age_max)
+    // and reads fall back to that. Listing them here built an UPDATE referencing
+    // non-existent columns, so every edit with an age range failed with
+    // "Failed to update service". Keep this list to real columns only.
     const editableFields = [
       'name', 'description', 'category_id', 'subcategory_id',
       'price', 'price_type', 'duration_minutes',
       'features', 'available_pincodes',
       'image_urls', 'primary_image_url',
       'cancellation_policy', 'service_type_id',
-      'age_group_min', 'age_group_max', 'max_children',
       'special_requirements', 'status',
+      'partner_approved',
     ];
     // Resolve subcategory by id / slug / name (or the human-readable label)
     // so a synthetic id from the wizard still maps to a real subcategory row.

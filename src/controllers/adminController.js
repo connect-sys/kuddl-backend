@@ -227,6 +227,7 @@ export async function initDatabase(request, env) {
           image_urls TEXT,
           primary_image_url TEXT,
           status TEXT DEFAULT 'active',
+          partner_approved INTEGER DEFAULT 0,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )

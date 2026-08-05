@@ -567,11 +567,20 @@ export async function resetPassword(request, env) {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
+    // `verify()` resolves to a boolean — the claims come from `decode()`.
+    // Reading `.id` off the boolean bound `undefined`, so this never found a user.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid or expired token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const payload = jwt.decode(token)?.payload || {};
 
     // Get user from database
     const userStmt = env.KUDDL_DB.prepare('SELECT * FROM admins WHERE id = ?');
-    const user = await userStmt.bind(decoded.id).first();
+    const user = await userStmt.bind(payload.id).first();
 
     if (!user) {
       return addCorsHeaders(new Response(JSON.stringify({

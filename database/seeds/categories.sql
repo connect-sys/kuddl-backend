@@ -37,7 +37,9 @@ INSERT OR REPLACE INTO subcategories (id, category_id, name, slug, description, 
 ('bloom_visual_arts_creative_classes', 'cat_bloom', 'Visual Arts & Creative Classes', 'visual-arts-creative-classes', 'Art and creative expression classes', true, 10),
 ('bloom_dance_movement_classes', 'cat_bloom', 'Dance & Movement Classes', 'dance-movement-classes', 'Dance and movement education', true, 11),
 ('bloom_montessori_education_programmes', 'cat_bloom', 'Montessori Education Programmes', 'montessori-education-programmes', 'Montessori-based educational programmes', true, 12),
-('bloom_other', 'cat_bloom', 'Other', 'other', 'Other learning and developmental programmes', true, 13);
+('bloom_drama_theatre', 'cat_bloom', 'Drama & Theatre', 'drama-theatre', 'Drama, acting and theatre classes for children', true, 13),
+('bloom_tech_classes', 'cat_bloom', 'Tech Classes', 'tech-classes', 'Coding, Robotics, AI, STEM and Electronics classes for children', true, 14),
+('bloom_other', 'cat_bloom', 'Other', 'other', 'Other learning and developmental programmes', true, 15);
 
 -- Care subcategories
 INSERT OR REPLACE INTO subcategories (id, category_id, name, slug, description, is_active, sort_order) VALUES
@@ -57,7 +59,8 @@ INSERT OR REPLACE INTO subcategories (id, category_id, name, slug, description, 
 ('care_wellness_nutrition', 'cat_care', 'Wellness & Nutrition', 'wellness-nutrition', 'Health, wellness and nutrition services', true, 14),
 ('care_pediatric_nutrition_diet_planning', 'cat_care', 'Pediatric Nutrition & Diet Planning', 'pediatric-nutrition-diet-planning', 'Professional nutrition and diet planning for children', true, 15),
 ('care_pediatric_sleep_consulting', 'cat_care', 'Pediatric Sleep Consulting', 'pediatric-sleep-consulting', 'Expert sleep consultation and support', true, 16),
-('care_other', 'cat_care', 'Other', 'other', 'Other care and therapy services', true, 17);
+('care_daycare', 'cat_care', 'Daycare', 'daycare', 'Daycare and creche services for children with dedicated onboarding', true, 17),
+('care_other', 'cat_care', 'Other', 'other', 'Other care and therapy services', true, 18);
 
 -- Discover subcategories
 INSERT OR REPLACE INTO subcategories (id, category_id, name, slug, description, is_active, sort_order) VALUES

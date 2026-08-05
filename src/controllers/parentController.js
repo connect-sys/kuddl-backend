@@ -666,6 +666,54 @@ export async function addChild(request, env) {
   }
 }
 
+// Update an existing child (native `children` table, scoped to the parent).
+export async function updateParentChild(request, env, childId) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization token required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const parentId = jwt.decode(token).payload.id;
+    const body = await request.json();
+
+    const updates = {};
+    const name = body.name || body.fullname;
+    if (name) updates.name = name;
+    if (body.gender) updates.gender = body.gender;
+    const dob = body.dateOfBirth || body.date_of_birth;
+    if (dob) updates.date_of_birth = dob;
+    if (body.profile_picture !== undefined) updates.profile_picture = body.profile_picture || null;
+    if (body.medicalConditions !== undefined) updates.medical_conditions = body.medicalConditions || null;
+    if (body.allergies !== undefined) updates.allergies = body.allergies || null;
+    if (body.dietaryRestrictions !== undefined) updates.dietary_restrictions = body.dietaryRestrictions || null;
+    if (body.specialNeeds !== undefined) updates.special_needs = body.specialNeeds || null;
+    if (body.bedtime !== undefined) updates.bedtime = body.bedtime || null;
+
+    if (Object.keys(updates).length === 0) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'No changes' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = [...Object.values(updates), new Date().toISOString(), childId, parentId];
+    const result = await env.KUDDL_DB.prepare(
+      `UPDATE children SET ${setClause}, updated_at = ? WHERE id = ? AND parent_id = ?`
+    ).bind(...values).run();
+
+    const changed = result?.meta?.changes ?? result?.changes ?? 0;
+    if (!changed) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Child updated successfully' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to update child', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 // Get parent bookings
 export async function getParentBookings(request, env) {
   try {

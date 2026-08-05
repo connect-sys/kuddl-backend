@@ -6,6 +6,7 @@
 import { Router } from 'itty-router';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 import { addCorsHeaders, handleCorsOptions, createApiResponse } from './utils/cors.js';
+import { extractServiceExtras } from './utils/helpers.js';
 import * as authController from './controllers/authController.js';
 import * as adminController from './controllers/adminController.js';
 import * as adminPartnerManagementController from './controllers/adminPartnerManagementController.js';
@@ -20,7 +21,7 @@ import servicesRoutes from './routes/servicesRoutes.js';
 import customerRoutes from './routes/customerRoutes.js';
 import kycRoutes from './routes/kycRoutes.js';
 import * as servicesController from './controllers/servicesController.js';
-import { convertProfileUrlsToPublic } from './utils/r2Utils.js';
+import { convertProfileUrlsToPublic, rewriteLegacyAssetHosts, toR2Key } from './utils/r2Utils.js';
 import * as bookingController from './controllers/bookingController.js';
 import * as simpleBookingController from './controllers/simpleBookingController.js';
 import * as tableSetupController from './controllers/tableSetupController.js';
@@ -1012,6 +1013,9 @@ router.put('/api/partner/profile', async (request, env) => {
       updates.name = payload.fullName.trim();
     }
     if (typeof payload.name === 'string') updates.name = payload.name;
+    // Business name is optional — allow empty string to clear it
+    if (typeof payload.businessName === 'string') updates.business_name = payload.businessName.trim();
+    else if (typeof payload.business_name === 'string') updates.business_name = payload.business_name.trim();
     if (typeof payload.email === 'string') updates.email = payload.email;
     if (typeof payload.phone === 'string') updates.phone = payload.phone;
     if (typeof payload.address === 'string') updates.address = payload.address;
@@ -2871,6 +2875,11 @@ router.post('/api/parent/children', async (request, env) => {
   return parentController.addChild(request, env);
 });
 
+router.put('/api/parent/children/:id', async (request, env) => {
+  // itty-router attaches path params to request.params (not ctx).
+  return parentController.updateParentChild(request, env, request.params.id);
+});
+
 router.get('/api/parent/bookings', async (request, env) => {
   return parentController.getParentBookings(request, env);
 });
@@ -3004,8 +3013,9 @@ router.get('/api/products', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
-        WHERE s.status = 'active' 
-        AND p.is_active = 1 
+        WHERE s.status = 'active'
+        AND p.is_active = 1
+        AND COALESCE(s.partner_approved, 1) = 1
         AND (
           (s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?) OR
           (s.available_pincodes IS NULL AND p.serviceable_pincodes IS NOT NULL AND p.serviceable_pincodes LIKE ?)
@@ -3821,6 +3831,7 @@ router.get('/api/public/services-all', async (request, env) => {
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
         WHERE s.status = 'active' AND p.is_active = 1
+          AND COALESCE(s.partner_approved, 1) = 1
       `;
       
       const params = [];
@@ -3867,6 +3878,8 @@ router.get('/api/public/services-all', async (request, env) => {
           price: service.price,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : [],
+          // Customer-facing extras extracted from features (display-only).
+          ...extractServiceExtras(service.features),
           available_pincodes: service.available_pincodes,
           image_urls: parsedImageUrls,
           images: parsedImageUrls,
@@ -4421,7 +4434,8 @@ router.get('/api/public/latest', async (request, env) => {
                p.business_name as provider_name, p.city
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
-        WHERE s.status = 'active' AND COALESCE(s.is_verified, 0) = 1
+        WHERE s.status = 'active'
+          AND COALESCE(s.partner_approved, 1) = 1
         ORDER BY s.created_at DESC LIMIT ?
       `).bind(limit).all(),
       env.KUDDL_DB.prepare(`
@@ -4430,7 +4444,8 @@ router.get('/api/public/latest', async (request, env) => {
                p.business_name as provider_name, c.city
         FROM camps c
         LEFT JOIN providers p ON c.provider_id = p.id
-        WHERE c.status = 'active' AND COALESCE(c.is_verified, 0) = 1 AND c.end_date >= date('now')
+        WHERE c.status = 'active'
+          AND (COALESCE(c.end_date, '') = '' OR c.end_date >= date('now'))
         ORDER BY c.created_at DESC LIMIT ?
       `).bind(limit).all().catch(() => ({ results: [] })),
     ]);
@@ -4585,7 +4600,8 @@ router.get('/api/public/services-all', async (request, env) => {
         p.is_active, p.kyc_status
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
-      ORDER BY s.created_at DESC 
+      WHERE COALESCE(s.partner_approved, 1) = 1
+      ORDER BY s.created_at DESC
       LIMIT ?
     `).bind(limit).all();
 
@@ -4681,7 +4697,8 @@ router.get('/api/public/services/:id', async (request, env) => {
         p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
-      WHERE s.id = ? AND p.id IS NOT NULL AND COALESCE(s.is_verified, 0) = 1
+      WHERE s.id = ? AND p.id IS NOT NULL
+        AND COALESCE(s.partner_approved, 1) = 1
     `).bind(serviceId).first();
 
     // If not found in services, check the camps table.
@@ -4724,6 +4741,8 @@ router.get('/api/public/services/:id', async (request, env) => {
         location: camp.location,
         city: camp.city,
         features: camp.features ? JSON.parse(camp.features) : [],
+        // Customer-facing extras extracted from features (display-only).
+        ...extractServiceExtras(camp.features),
         images: campImageUrls,
         primaryImage: camp.primary_image_url,
         primary_image_url: camp.primary_image_url,
@@ -4765,6 +4784,8 @@ router.get('/api/public/services/:id', async (request, env) => {
       price: service.price,
       duration: service.duration_minutes,
       features: service.features ? JSON.parse(service.features) : {},
+      // Customer-facing extras extracted from features (display-only).
+      ...extractServiceExtras(service.features),
       availablePincodes: service.available_pincodes ? JSON.parse(service.available_pincodes) : [],
       images: imageUrls,
       primaryImage: service.primary_image_url,
@@ -5050,8 +5071,9 @@ router.post('/api/services/:serviceId/move-temp-images', async (request, env) =>
     for (let i = 0; i < tempImageUrls.length; i++) {
       const tempUrl = tempImageUrls[i];
       
-      // Extract filename from temp URL
-      const tempPath = tempUrl.replace(env.R2_PUBLIC_URL + '/', '');
+      // Extract filename from temp URL. Tolerates retired asset hostnames, so
+      // images uploaded before the domain change still resolve to a valid key.
+      const tempPath = toR2Key(tempUrl, env);
       const filename = tempPath.split('/').pop();
       
       // Create new service folder path: partners/{partnerId}/services/{serviceId}/images/{filename}
@@ -5389,12 +5411,20 @@ router.post('/api/services/:serviceId/upload-image', async (request, env) => {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
+    // `verify()` resolves to a boolean — decode() carries the claims.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid or expired token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const payload = jwt.decode(token)?.payload || {};
 
     // Get provider ID
-    let providerId = decoded.id || decoded.user_id || decoded.userId || decoded.sub;
-    if (!providerId && decoded.user) {
-      providerId = decoded.user.id || decoded.user.user_id || decoded.user.userId;
+    let providerId = payload.id || payload.user_id || payload.userId || payload.sub;
+    if (!providerId && payload.user) {
+      providerId = payload.user.id || payload.user.user_id || payload.user.userId;
     }
 
     if (!providerId) {
@@ -5572,6 +5602,23 @@ router.post('/api/migrate/add-image-columns', async (request, env) => {
       console.log('✅ Added available_pincodes column');
     } catch (error) {
       console.log('ℹ️ available_pincodes column already exists or error:', error.message);
+    }
+
+    // Add partner_approved column if it doesn't exist. ADD COLUMN ... DEFAULT 1
+    // backfills every EXISTING service to approved so nothing currently visible
+    // disappears. NEW services are inserted with partner_approved = 0 by
+    // createService, so going forward a partner must approve before customers see them.
+    try {
+      await env.KUDDL_DB.prepare(`
+        ALTER TABLE services ADD COLUMN partner_approved INTEGER DEFAULT 1
+      `).run();
+      console.log('✅ Added partner_approved column');
+      // Backfill any pre-existing NULLs to approved so nothing disappears.
+      await env.KUDDL_DB.prepare(`
+        UPDATE services SET partner_approved = 1 WHERE partner_approved IS NULL
+      `).run();
+    } catch (error) {
+      console.log('ℹ️ partner_approved column already exists or error:', error.message);
     }
 
     return addCorsHeaders(new Response(JSON.stringify({
@@ -7510,8 +7557,23 @@ export default {
         });
       }
       
+      // Rows written before the kuddl.co -> kuddlkin.co domain change still hold
+      // absolute image URLs on a hostname that no longer resolves. Rewrite them
+      // on the way out. JSON bodies only — never touch binary/stream responses.
+      let body = response.body;
+      let rewrote = false;
+      const contentType = response.headers.get('Content-Type') || '';
+      if (contentType.includes('application/json')) {
+        const text = await response.text();
+        body = rewriteLegacyAssetHosts(text);
+        rewrote = body !== text;
+      }
+
       // Ensure CORS headers on every response by creating a new response
-      const newResponse = new Response(response.body, response);
+      const newResponse = new Response(body, response);
+      // The new hostname is longer than the old one, so any Content-Length
+      // inherited from the original response would now be wrong.
+      if (rewrote) newResponse.headers.delete('Content-Length');
       newResponse.headers.set('Access-Control-Allow-Origin', '*');
       newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Access-Control-Allow-Headers, X-API-Key, X-Client-Version');

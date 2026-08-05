@@ -330,11 +330,20 @@ export async function getCustomerProfile(request, env) {
     }
 
     const token = authHeader.substring(7);
-    const decoded = await jwt.verify(token, env.JWT_SECRET);
+    // `verify()` resolves to a boolean — the claims come from `decode()`.
+    // Reading `.id` off the boolean bound `undefined`, so this never found a customer.
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Invalid or expired token'
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const payload = jwt.decode(token)?.payload || {};
 
     const customer = await env.KUDDL_DB.prepare(
       'SELECT * FROM users WHERE id = ? AND role = "customer"'
-    ).bind(decoded.id).first();
+    ).bind(payload.id).first();
 
     if (!customer) {
       return addCorsHeaders(new Response(JSON.stringify({

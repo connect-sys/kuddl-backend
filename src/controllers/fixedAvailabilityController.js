@@ -39,6 +39,10 @@ export async function getProviderAvailability(request, env) {
 
     const dayOfWeek = new Date(date).getDay(); // 0 = Sunday, 6 = Saturday
     let timeSlots = [];
+    // Whether this partner has configured availability at all (any working hours
+    // saved), independent of whether the requested day happens to be open.
+    // Clients use this to decide between slot-picking and free date/time picking.
+    let configured = false;
 
     console.log(`🔍 Getting availability for provider ${providerId} on ${date} (day ${dayOfWeek})`);
 
@@ -49,6 +53,7 @@ export async function getProviderAvailability(request, env) {
       `).bind(providerId).first();
 
       if (workingHoursRecord && workingHoursRecord.working_hours_json) {
+        configured = true;
         console.log('✅ Found working_hours_json in partner_working_hours table');
         try {
           const workingHoursArray = JSON.parse(workingHoursRecord.working_hours_json);
@@ -87,6 +92,7 @@ export async function getProviderAvailability(request, env) {
         `).bind(providerId).first();
 
         if (partnerAvailability && partnerAvailability.working_hours) {
+          configured = true;
           console.log('✅ Found availability in partner_availability table');
           
           try {
@@ -129,7 +135,12 @@ export async function getProviderAvailability(request, env) {
           date,
           availableSlots: [],
           totalSlots: 0,
-          message: 'Partner is not available on this day'
+          // false → partner never set up availability: clients should let the
+          // customer free-pick a date/time instead of blocking the booking.
+          availabilityConfigured: configured,
+          message: configured
+            ? 'Partner is not available on this day'
+            : 'Partner has not configured availability'
         }
       })));
     }
@@ -204,6 +215,7 @@ export async function getProviderAvailability(request, env) {
         date,
         availableSlots: finalSlots,
         totalSlots: finalSlots.length,
+        availabilityConfigured: configured,
         dayOfWeek: dayOfWeek,
         bookedSlots: Array.from(bookedSlots)
       }
