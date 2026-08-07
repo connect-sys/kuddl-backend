@@ -49,6 +49,7 @@ export async function createBooking(request, env) {
       serviceId,
       providerId,
       selectedDate,
+      selectedEndDate,
       startTime,
       endTime,
       recurring,
@@ -301,6 +302,9 @@ export async function createBooking(request, env) {
       children: children || [],
       specialInstructions: specialInstructions || '',
       recurring: recurring || false,
+      // Period services (monthly/weekly/session/batch/term) carry an end date so
+      // the booking reflects the full time frame, not just the start day.
+      selectedEndDate: selectedEndDate || null,
       orderId: orderId || null // Store orderId in metadata
     };
 
