@@ -6,6 +6,9 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import { generateId } from '../utils/helpers.js';
 import { sendNotification } from './notificationController.js';
+import { executeBookingEffects } from '../utils/bookingEffects.js';
+import { transition, EVENTS, STATES } from '../utils/bookingStateMachine.js';
+import { scheduleSettlement } from './settlementController.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 
 // Create booking
@@ -308,9 +311,36 @@ export async function createBooking(request, env) {
       orderId: orderId || null // Store orderId in metadata
     };
 
-    // Determine status based on payment
-    const initialStatus = (paymentStatus === 'completed' || paymentStatus === 'paid') ? 'confirmed' : 'pending';
-    const initialPaymentStatus = (paymentStatus === 'completed' || paymentStatus === 'paid') ? 'paid' : 'pending';
+    // Determine status via the booking state machine (the money spine).
+    // Care services book as a REQUEST (money held → specialist confirms);
+    // everything else confirms instantly on payment (§06/§07).
+    let bookingModel = 'instant';
+    let serviceCategory = 'bloom'; // settlement category (§04)
+    try {
+      const svcRow = await env.KUDDL_DB.prepare('SELECT bloom_pricing, adventure_pricing, care_pricing FROM services WHERE id = ?').bind(serviceId).first();
+      if (svcRow && svcRow.care_pricing) { bookingModel = 'request'; serviceCategory = 'care'; }
+      else if (svcRow && svcRow.adventure_pricing) { serviceCategory = 'adventure'; }
+      else { serviceCategory = 'bloom'; }
+    } catch (e) {
+      console.warn('service category lookup failed (defaulting to bloom/instant):', e?.message);
+    }
+
+    const isPaid = (paymentStatus === 'completed' || paymentStatus === 'paid');
+    let machineState = STATES.PENDING_PAYMENT;
+    let effects = [];
+    if (isPaid) {
+      const r = transition(STATES.PENDING_PAYMENT, EVENTS.PAY_SUCCESS, { bookingModel });
+      machineState = r.state;
+      effects = r.effects;
+    }
+    const DB_STATUS = {
+      [STATES.CONFIRMED]: 'confirmed',
+      [STATES.PAID_HOLD]: 'awaiting_confirmation',
+      [STATES.PENDING_PAYMENT]: 'pending',
+    };
+    const initialStatus = DB_STATUS[machineState] || 'pending';
+    // Money is HELD (not captured) for a Care request until the specialist confirms.
+    const initialPaymentStatus = isPaid ? (bookingModel === 'request' ? 'held' : 'paid') : 'pending';
     const initialPaymentId = paymentId || null;
 
     // Generate invoice and QR code
@@ -352,6 +382,32 @@ export async function createBooking(request, env) {
     ).run();
 
     console.log('✅ Booking created with invoice:', invoiceId);
+
+    // Execute the state-machine effects (Start OTP §07, provider/parent
+    // notifications with NO parent phone §06, etc). A held Care request gets its
+    // OTP later, when the specialist confirms.
+    if (effects.length) {
+      const firstChild = (children || [])[0] || {};
+      await executeBookingEffects(env, effects, {
+        bookingId, parentId, providerId,
+        serviceName: service.name,
+        childFirstName: String(firstChild.name || '').trim().split(' ')[0] || null,
+        childAge: firstChild.age ?? null,
+        specialInstructions: bookingDetails.specialInstructions || null,
+        date: selectedDate, time: startTime, amount: baseAmount,
+      });
+    }
+
+    // Schedule settlement tranches (§04) for an instantly-confirmed booking.
+    // Care schedules later, when the specialist confirms.
+    if (machineState === STATES.CONFIRMED) {
+      const today = new Date().toISOString().slice(0, 10);
+      await scheduleSettlement(env, {
+        bookingId, providerId, category: serviceCategory,
+        serviceName: service.name, serviceAmount: baseAmount,
+        dates: { payment: today, booking: today, event: (selectedDate || today) },
+      });
+    }
 
     // Camp Architecture v2.0 — bump booked_seats on the chosen batch.
     if (batchId) {
@@ -428,6 +484,90 @@ export async function createBooking(request, env) {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     }));
+  }
+}
+
+// Cancellation-policy code → the plain sentence a parent reads (Customer §01 r9).
+const CANCELLATION_SENTENCE = {
+  flexible_24h: 'Free cancellation until 24 hours before.',
+  moderate_48h: 'Free cancellation until 48 hours before.',
+  strict_7d: 'Free cancellation until 7 days before.',
+};
+
+/**
+ * Confirmed-booking view (Customer Spec §07 / Screen 8) — the exact shape the
+ * parent's booking page renders. The booking id acts as the access capability
+ * (a random UUID), like an invoice link. The Start OTP, exact venue address,
+ * map pin and the provider's phone are revealed ONLY once status = confirmed
+ * (§01 r8); before that only the area/locality is shown. Empty fields are
+ * returned null so the client prints nothing (never "N/A").
+ *
+ * GET /api/bookings/:id/confirmed-view
+ */
+export async function getBookingConfirmedView(request, env) {
+  try {
+    // .../bookings/:id/confirmed-view → id is the second-last segment.
+    const id = new URL(request.url).pathname.split('/').slice(-2)[0];
+    if (!id) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'booking id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+
+    const booking = await env.KUDDL_DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(id).first();
+    if (!booking) return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Booking not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+
+    const provider = await env.KUDDL_DB.prepare('SELECT * FROM providers WHERE id = ?').bind(booking.provider_id).first() || {};
+    const service = await env.KUDDL_DB.prepare('SELECT name FROM services WHERE id = ?').bind(booking.service_id).first() || {};
+
+    // Confirmed OR anywhere later in the lifecycle — settlement is time-based
+    // (§04) so a booking can be 'settled' before the session even happens; the
+    // parent must still see their Start OTP + venue (§01 r8, §07).
+    const confirmed = ['confirmed', 'in_progress', 'delivered', 'settled'].includes(booking.status);
+
+    // Start OTP — only surfaced once confirmed.
+    let startOtp = null;
+    if (confirmed) {
+      const otpRow = await env.KUDDL_DB.prepare(
+        "SELECT otp_code FROM booking_otps WHERE booking_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
+      ).bind(id).first().catch(() => null);
+      startOtp = otpRow?.otp_code || null;
+    }
+
+    let details = {};
+    try { details = JSON.parse(booking.special_requests || '{}'); } catch { details = {}; }
+    const childName = (details.children && details.children[0] && details.children[0].name) || null;
+
+    // Price lines — the service total (registration fee / add-ons would each be
+    // their own line once line_items ship). Total is always a number (§06).
+    const total = Number(booking.total_amount) || 0;
+    const priceLines = [{ label: service.name || 'Booking', amount: total }];
+
+    // Refund shown before the cancel tap (§01 r9 / §06). Full refund while the
+    // policy window is open; a real refund engine will make this exact later.
+    const refundAmount = confirmed ? total : 0;
+
+    const data = {
+      id: booking.id,
+      status: booking.status,
+      serviceTitle: service.name || null,
+      providerName: provider.business_name || null,
+      date: booking.selected_date || booking.booking_date || null,
+      time: booking.start_time || null,
+      startOtp,
+      locality: provider.city || provider.area || null,
+      venueAddress: confirmed ? (provider.venue_address || null) : null,
+      latitude: confirmed ? (provider.latitude ?? null) : null,
+      longitude: confirmed ? (provider.longitude ?? null) : null,
+      providerPhone: confirmed ? (provider.phone || null) : null,
+      childName,
+      planLabel: null,
+      scheduleLabel: booking.start_time && booking.end_time ? `${booking.start_time}–${booking.end_time}` : null,
+      priceLines,
+      cancellationSentence: CANCELLATION_SENTENCE[provider.cancellation_policy] || null,
+      refundAmount,
+    };
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, data }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('getBookingConfirmedView error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to load booking', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }
 

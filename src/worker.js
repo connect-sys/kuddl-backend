@@ -11,6 +11,7 @@ import * as authController from './controllers/authController.js';
 import * as adminController from './controllers/adminController.js';
 import * as adminPartnerManagementController from './controllers/adminPartnerManagementController.js';
 import * as addProviderCoordinatesController from './controllers/addProviderCoordinatesController.js';
+import * as addPartnerPrdColumnsController from './controllers/addPartnerPrdColumnsController.js';
 import * as otpController from './controllers/otpController.js';
 import * as otpServiceController from './controllers/otpServiceController.js';
 import * as otpDatabaseController from './controllers/otpDatabaseController.js';
@@ -37,6 +38,19 @@ import * as parentController from './controllers/parentController.js';
 import * as databaseSetupController from './controllers/databaseSetupController.js';
 import { GoogleAuthController } from './controllers/googleAuthController.js';
 import * as categoriesController from './controllers/categoriesController.js';
+import * as taxonomyController from './controllers/taxonomyController.js';
+import * as taxonomyReconcileController from './controllers/taxonomyReconcileController.js';
+import * as addBloomServiceColumnsController from './controllers/addBloomServiceColumnsController.js';
+import * as bloomServiceController from './controllers/bloomServiceController.js';
+import * as addAdventureServiceColumnsController from './controllers/addAdventureServiceColumnsController.js';
+import * as adventureServiceController from './controllers/adventureServiceController.js';
+import * as addCareServiceColumnsController from './controllers/addCareServiceColumnsController.js';
+import * as careServiceController from './controllers/careServiceController.js';
+import * as careBookingController from './controllers/careBookingController.js';
+import * as addRefundRequestsTableController from './controllers/addRefundRequestsTableController.js';
+import * as settlementController from './controllers/settlementController.js';
+import * as homepageController from './controllers/homepageController.js';
+import * as reviewModerationController from './controllers/reviewModerationController.js';
 import * as serviceTypeController from './controllers/serviceTypeController.js';
 import * as availabilityController from './controllers/availabilityController.js';
 import * as fixedAvailabilityController from "./controllers/fixedAvailabilityController.js";
@@ -98,6 +112,15 @@ router.all('/api/customers/*', customerRoutes.handle);
 router.all('/api/kyc/*', kycRoutes.handle);
 
 // Category routes
+router.get('/api/taxonomy', (request, env) => taxonomyController.getTaxonomy(request, env));
+router.get('/api/bloom/services', (request, env) => bloomServiceController.getBloomServiceList(request, env));
+router.get('/api/bloom/service/:id', (request, env) => bloomServiceController.getBloomServiceDetail(request, env));
+router.get('/api/adventure/services', (request, env) => adventureServiceController.getAdventureServiceList(request, env));
+router.get('/api/adventure/service/:id', (request, env) => adventureServiceController.getAdventureServiceDetail(request, env));
+router.get('/api/care/services', (request, env) => careServiceController.getCareServiceList(request, env));
+router.get('/api/care/service/:id', (request, env) => careServiceController.getCareServiceDetail(request, env));
+router.post('/api/care/bookings/:id/confirm', (request, env) => careBookingController.confirmCareBooking(request, env));
+router.post('/api/care/bookings/:id/decline', (request, env) => careBookingController.declineCareBooking(request, env));
 router.get('/api/categories', (request, env) => categoriesController.getCategories(request, env));
 router.get('/api/categories/module', (request, env) => categoriesController.getCategoriesByModule(request, env));
 router.get('/api/subcategories', (request, env) => categoriesController.getSubcategories(request, env));
@@ -1077,6 +1100,27 @@ router.put('/api/partner/profile', async (request, env) => {
 
     // Document URLs
     if (typeof payload.document_urls === 'string') updates.document_urls = payload.document_urls;
+
+    // ── Partner Registration Form 1 (Screen A) PRD fields ──
+    // Explicit parent-facing cancellation policy — no longer defaults to Flexible.
+    if (typeof payload.cancellation_policy === 'string') {
+      const allowed = ['flexible_24h', 'moderate_48h', 'strict_7d'];
+      if (allowed.includes(payload.cancellation_policy)) updates.cancellation_policy = payload.cancellation_policy;
+    }
+    // Google venue import → address + exact geocode (+ place id).
+    if (typeof payload.venue_address === 'string') updates.venue_address = payload.venue_address;
+    if (typeof payload.google_place_id === 'string') updates.google_place_id = payload.google_place_id;
+    if (typeof payload.latitude !== 'undefined' && payload.latitude !== null && payload.latitude !== '') {
+      const lat = Number(payload.latitude);
+      if (Number.isFinite(lat)) updates.latitude = lat;
+    }
+    if (typeof payload.longitude !== 'undefined' && payload.longitude !== null && payload.longitude !== '') {
+      const lng = Number(payload.longitude);
+      if (Number.isFinite(lng)) updates.longitude = lng;
+    }
+    // Instagram / website — ops-only, never shown to parents.
+    if (typeof payload.instagram_handle === 'string') updates.instagram_handle = payload.instagram_handle;
+    else if (typeof payload.instagram === 'string') updates.instagram_handle = payload.instagram;
 
     // Profile completion tracking
     if (typeof payload.last_completed_step !== 'undefined') {
@@ -2282,6 +2326,39 @@ router.post('/api/admin/init-database', async (request, env) => {
 router.post('/api/admin/add-provider-coordinates', async (request, env) => {
   return addProviderCoordinatesController.addProviderCoordinates(request, env);
 });
+
+// Migration — add Partner Registration (Screen A) PRD columns to providers
+router.post('/api/admin/migrate/partner-prd-columns', async (request, env) => {
+  return addPartnerPrdColumnsController.addPartnerPrdColumns(request, env);
+});
+router.get('/api/admin/migrate/partner-prd-columns', async (request, env) => {
+  return addPartnerPrdColumnsController.addPartnerPrdColumns(request, env);
+});
+
+// Taxonomy reconciliation (Screen H) — dry-run by default, ?apply=true to mutate
+router.get('/api/admin/migrate/taxonomy-reconcile', (request, env) => taxonomyReconcileController.reconcileTaxonomy(request, env));
+router.post('/api/admin/migrate/taxonomy-reconcile', (request, env) => taxonomyReconcileController.reconcileTaxonomy(request, env));
+
+// Bloom structured pricing column on services
+router.get('/api/admin/migrate/bloom-service-columns', (request, env) => addBloomServiceColumnsController.addBloomServiceColumns(request, env));
+router.post('/api/admin/migrate/bloom-service-columns', (request, env) => addBloomServiceColumnsController.addBloomServiceColumns(request, env));
+router.get('/api/admin/migrate/adventure-service-columns', (request, env) => addAdventureServiceColumnsController.addAdventureServiceColumns(request, env));
+router.post('/api/admin/migrate/adventure-service-columns', (request, env) => addAdventureServiceColumnsController.addAdventureServiceColumns(request, env));
+router.get('/api/admin/migrate/care-service-columns', (request, env) => addCareServiceColumnsController.addCareServiceColumns(request, env));
+router.post('/api/admin/migrate/care-service-columns', (request, env) => addCareServiceColumnsController.addCareServiceColumns(request, env));
+router.get('/api/admin/migrate/refund-requests-table', (request, env) => addRefundRequestsTableController.addRefundRequestsTable(request, env));
+router.post('/api/admin/migrate/refund-requests-table', (request, env) => addRefundRequestsTableController.addRefundRequestsTable(request, env));
+router.get('/api/admin/migrate/settlements-table', (request, env) => settlementController.ensureSettlementsTable(request, env));
+router.post('/api/admin/migrate/settlements-table', (request, env) => settlementController.ensureSettlementsTable(request, env));
+router.get('/api/admin/settlements/run', (request, env) => settlementController.runSettlementPayouts(request, env));
+router.post('/api/admin/settlements/run', (request, env) => settlementController.runSettlementPayouts(request, env));
+router.get('/api/partner/earnings', (request, env) => settlementController.getProviderEarnings(request, env));
+router.get('/api/homepage/rails', (request, env) => homepageController.getHomepageRails(request, env));
+router.get('/api/admin/migrate/homepage-rails-table', (request, env) => homepageController.ensureHomepageRailsTable(request, env));
+router.post('/api/admin/migrate/homepage-rails-table', (request, env) => homepageController.ensureHomepageRailsTable(request, env));
+router.get('/api/admin/migrate/review-status-column', (request, env) => reviewModerationController.ensureReviewStatusColumn(request, env));
+router.post('/api/admin/migrate/review-status-column', (request, env) => reviewModerationController.ensureReviewStatusColumn(request, env));
+router.post('/api/admin/reviews/:id/approve', (request, env) => reviewModerationController.approveReview(request, env));
 
 // Fix categories table schema
 router.post('/api/admin/fix-categories-schema', async (request, env) => {
@@ -6553,6 +6630,14 @@ router.post('/api/test-parent-children', async (request, env) => {
   return isolatedTestController.testParentChildrenCreation(request, env);
 });
 
+router.get('/api/bookings/:id/confirmed-view', async (request, env) => {
+  return bookingController.getBookingConfirmedView(request, env);
+});
+
+router.get('/api/bookings/:id/settlement', async (request, env) => {
+  return settlementController.getBookingSettlement(request, env);
+});
+
 router.get('/api/bookings/:id', async (request, env) => {
   return bookingController.getBookingById(request, env);
 });
@@ -7521,6 +7606,18 @@ router.options('*', () => {
 
 // Main worker handler
 export default {
+  // Cron trigger (wrangler.toml [triggers].crons) — the daily settlement payout
+  // run (§04): releases tranches whose release_date has arrived and settles
+  // fully-released bookings. Same job the ops endpoint calls.
+  async scheduled(event, env, ctx) {
+    try {
+      const result = await settlementController.runPayoutJob(env);
+      console.log('⏱️ settlement payout run:', JSON.stringify(result));
+    } catch (error) {
+      console.error('❌ scheduled payout run failed:', error.message);
+    }
+  },
+
   async fetch(request, env, ctx) {
     // Handle CORS preflight at the top level
     if (request.method === 'OPTIONS') {

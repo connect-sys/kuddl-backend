@@ -1,4 +1,5 @@
 import { addCorsHeaders } from '../utils/cors.js';
+import { sendEmail } from '../utils/email.js';
 
 function generateId() {
   return crypto.randomUUID();
@@ -382,13 +383,17 @@ async function sendPushNotification(env, recipientId, recipientType, messageType
 
 async function sendEmailNotification(env, email, messageType, templateData, bookingId, recipientType, recipientId) {
   try {
-    // Implement email notification logic (SendGrid, etc.)
+    // Real delivery via SendGrid (skips gracefully when no API key is set).
     const message = getEmailTemplate(messageType, templateData);
-    
-    // For now, just log as sent (implement actual email service)
-    await logNotification(env, bookingId, recipientType, recipientId, 'email', messageType, message, true);
-    
-    return { success: true, message: 'Email notification sent' };
+    const delivery = await sendEmail(env, {
+      to: email,
+      subject: `Kuddl Kin — ${String(messageType || '').replace(/_/g, ' ')}`,
+      html: message,
+    });
+
+    await logNotification(env, bookingId, recipientType, recipientId, 'email', messageType, message, delivery.success !== false);
+
+    return { success: true, message: 'Email notification processed', delivery };
 
   } catch (error) {
     console.error('❌ Email notification error:', error);

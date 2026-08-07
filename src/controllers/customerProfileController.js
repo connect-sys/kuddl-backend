@@ -5,6 +5,7 @@
 
 import { addCorsHeaders } from '../utils/cors.js';
 import { generateId } from '../utils/helpers.js';
+import { isCareProvider, recomputeProviderRating } from './reviewModerationController.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
 
 // Helper function to get customer ID from token
@@ -345,26 +346,24 @@ export async function createReview(request, env) {
 
     const { providerId, bookingId, rating, reviewText } = await request.json();
 
+    // Care partner reviews are HELD for approval before they publish or count
+    // (§07.4 / Screen G rule 4). Everyone else auto-approves.
+    const careProvider = await isCareProvider(env, providerId);
+    const reviewStatus = careProvider ? 'pending' : 'approved';
+
     const reviewId = generateId();
     await env.KUDDL_DB.prepare(
-      'INSERT INTO customer_reviews (id, customer_id, provider_id, booking_id, rating, review_text) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(reviewId, customerId, providerId, bookingId, rating, reviewText).run();
+      'INSERT INTO customer_reviews (id, customer_id, provider_id, booking_id, rating, review_text, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(reviewId, customerId, providerId, bookingId, rating, reviewText, reviewStatus).run();
 
-    // Update provider average rating
-    const avgResult = await env.KUDDL_DB.prepare(
-      'SELECT AVG(rating) as avg_rating FROM customer_reviews WHERE provider_id = ?'
-    ).bind(providerId).first();
-
-    if (avgResult) {
-      await env.KUDDL_DB.prepare(
-        'UPDATE providers SET average_rating = ? WHERE id = ?'
-      ).bind(avgResult.avg_rating, providerId).run();
-    }
+    // Recompute the average from APPROVED reviews only (a held Care review does
+    // not move the rating until an admin approves it).
+    await recomputeProviderRating(env, providerId);
 
     return new Response(JSON.stringify({
       success: true,
-      message: 'Review submitted successfully',
-      data: { id: reviewId }
+      message: careProvider ? 'Review submitted — held for approval' : 'Review submitted successfully',
+      data: { id: reviewId, status: reviewStatus }
     }), {
       status: 201,
       headers: addCorsHeaders({ 'Content-Type': 'application/json' })

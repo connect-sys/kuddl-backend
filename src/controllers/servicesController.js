@@ -9,6 +9,7 @@ import { addCorsHeaders } from '../utils/cors.js';
 import { getPublicR2Url } from '../utils/r2Utils.js';
 import { insertBatch } from './batchesController.js';
 import { extractServiceExtras } from '../utils/helpers.js';
+import { validateServiceName, findBannedWords } from '../utils/serviceValidation.js';
 
 // Get service categories endpoint
 export async function getServiceCategories(request, env) {
@@ -435,8 +436,27 @@ export async function createService(request, env) {
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
+    // ── PRD content rules (Partner Mockups §B/G): service name ≤ 60 chars and
+    // no banned words in the name or description. Rejected on save so a bad
+    // listing can never render on the customer site.
+    const nameCheck = validateServiceName(name);
+    if (!nameCheck.valid) {
+      console.log('❌ Service name rejected:', nameCheck.error);
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false, message: nameCheck.error,
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const bannedInDescription = findBannedWords(description || '');
+    if (bannedInDescription.length) {
+      console.log('❌ Description contains banned words:', bannedInDescription);
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: `Description contains not-allowed words/claims: ${bannedInDescription.join(', ')}. Remove them and try again.`,
+      }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
     console.log('✅ All required fields validated successfully');
-    
+
 
     // Verify provider exists and is active
     console.log('🔍 Verifying provider record:', providerId);
@@ -578,6 +598,53 @@ export async function createService(request, env) {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
       }));
+    }
+
+    // Structured Bloom pricing (Screen C) — additive: only when the partner
+    // sends it, and guarded so a missing column can never fail a create.
+    // The read path parses this + reuses batches to assemble the Bloom shape;
+    // an incomplete listing is flagged (assembleBloom), never rendered blank.
+    if (serviceData.bloom_pricing) {
+      try {
+        const bp = typeof serviceData.bloom_pricing === 'string'
+          ? JSON.parse(serviceData.bloom_pricing) : serviceData.bloom_pricing;
+        await env.KUDDL_DB.prepare('UPDATE services SET bloom_pricing = ? WHERE id = ?')
+          .bind(JSON.stringify(bp), serviceId).run();
+        console.log('✅ Bloom pricing saved for', serviceId);
+      } catch (e) {
+        console.warn('bloom_pricing not saved (column missing or bad JSON):', e.message);
+      }
+    }
+
+    // Adventure (parties) — one JSON blob holding variants + add-ons +
+    // setup questions + ages/capacity/space. Parties have NO batches; the read
+    // path parses this and assembleAdventure flags an incomplete listing rather
+    // than rendering blanks. Additive UPDATE, guarded like bloom_pricing.
+    if (serviceData.adventure_pricing) {
+      try {
+        const ap = typeof serviceData.adventure_pricing === 'string'
+          ? JSON.parse(serviceData.adventure_pricing) : serviceData.adventure_pricing;
+        await env.KUDDL_DB.prepare('UPDATE services SET adventure_pricing = ? WHERE id = ?')
+          .bind(JSON.stringify(ap), serviceId).run();
+        console.log('✅ Adventure pricing saved for', serviceId);
+      } catch (e) {
+        console.warn('adventure_pricing not saved (column missing or bad JSON):', e.message);
+      }
+    }
+
+    // Care (specialists) — one JSON blob holding session price + packages +
+    // claimed title + registration number + ages. The protected-title gate is
+    // applied on READ from the provider's verified state, never from this JSON.
+    if (serviceData.care_pricing) {
+      try {
+        const cp = typeof serviceData.care_pricing === 'string'
+          ? JSON.parse(serviceData.care_pricing) : serviceData.care_pricing;
+        await env.KUDDL_DB.prepare('UPDATE services SET care_pricing = ? WHERE id = ?')
+          .bind(JSON.stringify(cp), serviceId).run();
+        console.log('✅ Care pricing saved for', serviceId);
+      } catch (e) {
+        console.warn('care_pricing not saved (column missing or bad JSON):', e.message);
+      }
     }
 
     // Camp Architecture v2.0 — create Batch #1 from the wizard payload.

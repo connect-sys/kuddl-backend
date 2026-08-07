@@ -32,12 +32,12 @@ export async function createOTPForBooking(env, bookingId, parentId, providerId) 
 
     await env.KUDDL_DB.prepare(`
       INSERT INTO booking_otps (
-        id, booking_id, parent_id, provider_id, otp_code, 
-        status, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        id, booking_id, parent_id, provider_id, otp_code,
+        status, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
     `).bind(
       otpId, bookingId, parentId, providerId, otpCode,
-      expiresAt.toISOString(), new Date().toISOString(), new Date().toISOString()
+      expiresAt.toISOString(), new Date().toISOString()
     ).run();
 
     // Send notification to parent
@@ -102,12 +102,12 @@ export async function generateBookingOTP(request, env) {
     // Store OTP in database
     await env.KUDDL_DB.prepare(`
       INSERT INTO booking_otps (
-        id, booking_id, parent_id, provider_id, otp_code, 
-        status, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        id, booking_id, parent_id, provider_id, otp_code,
+        status, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
     `).bind(
       otpId, bookingId, booking.parent_id, booking.provider_id, otpCode,
-      expiresAt.toISOString(), new Date().toISOString(), new Date().toISOString()
+      expiresAt.toISOString(), new Date().toISOString()
     ).run();
 
     // Send OTP to parent via notification/SMS
