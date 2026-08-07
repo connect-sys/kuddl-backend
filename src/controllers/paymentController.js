@@ -91,19 +91,17 @@ export async function createPaymentOrder(request, env) {
 
     const orderId = razorpayOrder.id;
 
-    // Store payment order in database — omit booking_id entirely when not provided
-    // to avoid NOT NULL constraint failure (booking may not exist yet at payment init)
+    // Store a payment_orders row only when we already have a booking — the
+    // column is NOT NULL and a FK to bookings(id). In the current flow the
+    // booking is created AFTER a successful payment (and links back via
+    // razorpay_order_id), so when there's no bookingId yet we skip this insert
+    // and just return the Razorpay order to the client.
     const paymentOrderId = generateId();
     if (bookingId) {
       await env.KUDDL_DB.prepare(`
         INSERT INTO payment_orders (id, amount, currency, status, booking_id, created_at, razorpay_order_id)
         VALUES (?, ?, ?, 'created', ?, ?, ?)
       `).bind(paymentOrderId, amount, currency, bookingId, new Date().toISOString(), orderId).run();
-    } else {
-      await env.KUDDL_DB.prepare(`
-        INSERT INTO payment_orders (id, amount, currency, status, created_at, razorpay_order_id)
-        VALUES (?, ?, ?, 'created', ?, ?)
-      `).bind(paymentOrderId, amount, currency, new Date().toISOString(), orderId).run();
     }
 
     return addCorsHeaders(new Response(JSON.stringify({
@@ -171,7 +169,7 @@ export async function verifyPayment(request, env) {
       paymentOrderId 
     } = await request.json();
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !paymentOrderId) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Missing payment verification data'
@@ -181,22 +179,9 @@ export async function verifyPayment(request, env) {
       }));
     }
 
-    // Get payment order
-    const paymentOrder = await env.KUDDL_DB.prepare(
-      'SELECT * FROM payment_orders WHERE id = ?'
-    ).bind(paymentOrderId).first();
-
-    if (!paymentOrder) {
-      return addCorsHeaders(new Response(JSON.stringify({
-        success: false,
-        message: 'Payment order not found'
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      }));
-    }
-
-    // Verify signature
+    // Verify the Razorpay signature — this is the authoritative check and does
+    // NOT depend on a local DB row (in the pay-then-book flow the booking and
+    // payment_orders row are created AFTER payment).
     let isSignatureValid = false;
     try {
       isSignatureValid = await verifyRazorpaySignature(
@@ -219,28 +204,27 @@ export async function verifyPayment(request, env) {
       }));
     }
 
-    // Update payment order status
-    await env.KUDDL_DB.prepare(`
-      UPDATE payment_orders 
-      SET status = 'completed', razorpay_payment_id = ?, updated_at = ?
-      WHERE id = ?
-    `).bind(
-      razorpay_payment_id,
-      new Date().toISOString(),
-      paymentOrderId
-    ).run();
+    // If a payment_orders row exists (only created when a booking already
+    // existed), mark it completed and update the linked booking. A missing row
+    // is NOT an error — the signature is verified above.
+    const paymentOrder = paymentOrderId
+      ? await env.KUDDL_DB.prepare('SELECT * FROM payment_orders WHERE id = ?').bind(paymentOrderId).first()
+      : null;
 
-    // If there is a booking ID linked, update it
-    if (paymentOrder.booking_id) {
-       await env.KUDDL_DB.prepare(`
-        UPDATE bookings 
-        SET payment_status = 'paid', payment_id = ?, updated_at = ?
+    if (paymentOrder) {
+      await env.KUDDL_DB.prepare(`
+        UPDATE payment_orders
+        SET status = 'completed', razorpay_payment_id = ?, updated_at = ?
         WHERE id = ?
-      `).bind(
-        razorpay_payment_id,
-        new Date().toISOString(),
-        paymentOrder.booking_id
-      ).run();
+      `).bind(razorpay_payment_id, new Date().toISOString(), paymentOrderId).run();
+
+      if (paymentOrder.booking_id) {
+        await env.KUDDL_DB.prepare(`
+          UPDATE bookings
+          SET payment_status = 'paid', payment_id = ?, updated_at = ?
+          WHERE id = ?
+        `).bind(razorpay_payment_id, new Date().toISOString(), paymentOrder.booking_id).run();
+      }
     }
     
     // Also check if bookingId was passed in body (legacy support)
