@@ -11,6 +11,13 @@ import { insertBatch } from './batchesController.js';
 import { extractServiceExtras } from '../utils/helpers.js';
 import { validateServiceName, findBannedWords } from '../utils/serviceValidation.js';
 
+// Parse a JSON column safely — returns the fallback on null/invalid instead of throwing.
+function safeJson(v, fallback) {
+  if (v == null) return fallback;
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return fallback; }
+}
+
 // Get service categories endpoint
 export async function getServiceCategories(request, env) {
   try {
@@ -1477,8 +1484,17 @@ export async function getPublicServiceById(request, env) {
         s.price_type,
         s.price,
         s.duration_minutes,
+        s.short_description,
+        s.age_group,
+        s.special_requirements,
+        s.cancellation_policy,
         s.features,
         s.available_pincodes,
+        s.image_urls,
+        s.primary_image_url,
+        s.bloom_pricing,
+        s.adventure_pricing,
+        s.care_pricing,
         s.created_at,
         s.provider_id,
         p.id as provider_db_id,
@@ -1620,21 +1636,34 @@ export async function getPublicServiceById(request, env) {
       priceType: service.price_type,
       price: service.price,
       duration: service.duration_minutes,
-      features: service.features ? JSON.parse(service.features) : {},
+      shortDescription: service.short_description || null,
+      ageGroup: service.age_group || null,
+      specialRequirements: service.special_requirements || null,
+      cancellationPolicy: service.cancellation_policy || null,
+      features: service.features ? safeJson(service.features, {}) : {},
       // Customer-facing extras (trial offer, one-time registration fee, daycare) — display-only.
       ...extractServiceExtras(service.features),
-      availablePincodes: service.available_pincodes ? JSON.parse(service.available_pincodes) : [],
+      availablePincodes: service.available_pincodes ? safeJson(service.available_pincodes, []) : [],
+      images: service.image_urls ? safeJson(service.image_urls, []) : [],
+      primaryImage: service.primary_image_url || null,
+      // Structured pricing blobs (parsed) so the detail page can render the full
+      // Bloom/Adventure/Care shape when present.
+      bloomPricing: service.bloom_pricing ? safeJson(service.bloom_pricing, null) : null,
+      adventurePricing: service.adventure_pricing ? safeJson(service.adventure_pricing, null) : null,
+      carePricing: service.care_pricing ? safeJson(service.care_pricing, null) : null,
       provider: {
         id: service.provider_id,
         businessName: service.business_name,
         name: service.provider_name || service.business_name,
         profileImage: service.profile_image_url,
         profile_image_url: service.profile_image_url,
-        location: `${service.city}, ${service.state}`,
+        location: [service.city, service.state].filter(Boolean).join(', '),
         city: service.city,
         state: service.state,
-        average_rating: service.average_rating || 4.5,
-        experience_years: service.experience_years || 3,
+        // Real values ONLY — no fake 4.5 rating / 3 years (§01 r4). Null when
+        // there is nothing real to show; the UI hides these entirely.
+        average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : null,
+        experience_years: Number(service.experience_years) > 0 ? Number(service.experience_years) : null,
         business_name: service.business_name
       },
       createdAt: service.created_at

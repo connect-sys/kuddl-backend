@@ -57,6 +57,23 @@ export async function getWishlist(request, env) {
 }
 
 // Add to wishlist
+// Idempotent migration — ensures the wishlist table exists on every env.
+export async function ensureCustomerWishlistTable(request, env) {
+  try {
+    await env.KUDDL_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS customer_wishlist (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        service_id TEXT,
+        created_at TEXT
+      )
+    `).run();
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'customer_wishlist table ensured' }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to ensure wishlist table', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 export async function addToWishlist(request, env) {
   try {
     const authHeader = request.headers.get('Authorization');

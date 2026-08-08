@@ -83,6 +83,13 @@ import * as contactController from './controllers/contactController.js';
 import * as serviceWizardController from './controllers/serviceWizardController.js';
 import bcrypt from 'bcryptjs';
 
+// Parse a JSON column safely — returns the fallback on null/invalid, never throws.
+function safeJsonParse(v, fallback) {
+  if (v == null) return fallback;
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return fallback; }
+}
+
 // Initialize router
 const router = Router();
 
@@ -2977,6 +2984,8 @@ router.post('/api/customer/wishlist', async (request, env) => {
 router.delete('/api/customer/wishlist/:service_id', async (request, env) => {
   return customerWishlistController.removeFromWishlist(request, env);
 });
+router.get('/api/admin/migrate/customer-wishlist-table', (request, env) => customerWishlistController.ensureCustomerWishlistTable(request, env));
+router.post('/api/admin/migrate/customer-wishlist-table', (request, env) => customerWishlistController.ensureCustomerWishlistTable(request, env));
 
 // Customer Wallet routes
 router.get('/api/customer/wallet', async (request, env) => {
@@ -4770,12 +4779,15 @@ router.get('/api/public/services/:id', async (request, env) => {
     // Query for specific service with provider details. Only return if admin-verified.
     const service = await env.KUDDL_DB.prepare(`
       SELECT
-        s.id, s.name, s.description, s.category_id, s.subcategory_id,
+        s.id, s.name, s.description, s.short_description, s.category_id, s.subcategory_id,
         s.price_type, s.price, s.duration_minutes, s.features,
+        s.age_group, s.special_requirements, s.cancellation_policy,
+        s.bloom_pricing, s.adventure_pricing, s.care_pricing,
         s.available_pincodes, s.created_at, s.provider_id, s.status,
         s.image_urls, s.primary_image_url,
         p.id as provider_db_id, p.business_name, p.name as provider_name,
-        p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status
+        p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status,
+        p.experience_years, COALESCE(p.rating, 0) as average_rating
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       WHERE s.id = ? AND p.id IS NOT NULL
@@ -4864,12 +4876,21 @@ router.get('/api/public/services/:id', async (request, env) => {
       priceType: service.price_type,
       price: service.price,
       duration: service.duration_minutes,
-      features: service.features ? JSON.parse(service.features) : {},
+      shortDescription: service.short_description || null,
+      ageGroup: service.age_group || null,
+      specialRequirements: service.special_requirements || null,
+      cancellationPolicy: service.cancellation_policy || null,
+      features: service.features ? safeJsonParse(service.features, {}) : {},
       // Customer-facing extras extracted from features (display-only).
       ...extractServiceExtras(service.features),
-      availablePincodes: service.available_pincodes ? JSON.parse(service.available_pincodes) : [],
+      availablePincodes: service.available_pincodes ? safeJsonParse(service.available_pincodes, []) : [],
       images: imageUrls,
       primaryImage: service.primary_image_url,
+      // Structured Bloom/Adventure/Care shapes when present, so the detail page
+      // can render trial/plans/variants/credentials directly.
+      bloomPricing: service.bloom_pricing ? safeJsonParse(service.bloom_pricing, null) : null,
+      adventurePricing: service.adventure_pricing ? safeJsonParse(service.adventure_pricing, null) : null,
+      carePricing: service.care_pricing ? safeJsonParse(service.care_pricing, null) : null,
       provider: {
         id: service.provider_id,
         businessName: service.business_name,
@@ -4878,11 +4899,13 @@ router.get('/api/public/services/:id', async (request, env) => {
         last_name: '',
         profileImage: service.profile_image_url,
         profile_image_url: service.profile_image_url,
-        location: `${service.city}, ${service.state}`,
+        location: [service.city, service.state].filter(Boolean).join(', '),
         city: service.city,
         state: service.state,
-        average_rating: 4.5, // Default rating since column doesn't exist
-        experience_years: 3, // Default experience since column doesn't exist
+        // Real values ONLY — no fake 4.5★ / 3 years (Customer Spec §01 r4).
+        // Null when there is nothing real; the UI hides these entirely.
+        average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : null,
+        experience_years: Number(service.experience_years) > 0 ? Number(service.experience_years) : null,
         business_name: service.business_name
       },
       createdAt: service.created_at
