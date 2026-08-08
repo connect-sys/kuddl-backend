@@ -2957,6 +2957,10 @@ router.put('/api/parent/children/:id', async (request, env) => {
   return parentController.updateParentChild(request, env, request.params.id);
 });
 
+router.delete('/api/parent/children/:id', async (request, env) => {
+  return parentController.deleteParentChild(request, env, request.params.id);
+});
+
 router.get('/api/parent/bookings', async (request, env) => {
   return parentController.getParentBookings(request, env);
 });
@@ -7674,6 +7678,12 @@ export default {
       newResponse.headers.set('Access-Control-Allow-Origin', '*');
       newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Access-Control-Allow-Headers, X-API-Key, X-Client-Version');
+      // Security headers on every API response (safe for JSON APIs).
+      newResponse.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+      newResponse.headers.set('X-Content-Type-Options', 'nosniff');
+      newResponse.headers.set('X-Frame-Options', 'DENY');
+      newResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+      newResponse.headers.set('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
       return newResponse;
     } catch (error) {
       console.error('❌ Unhandled worker error:', error.message, error.stack);

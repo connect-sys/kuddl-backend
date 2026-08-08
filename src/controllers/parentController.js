@@ -714,6 +714,35 @@ export async function updateParentChild(request, env, childId) {
   }
 }
 
+// Delete a child (scoped to the authenticated parent).
+export async function deleteParentChild(request, env, childId) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization token required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const parentId = jwt.decode(token).payload.id;
+    if (!childId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const result = await env.KUDDL_DB.prepare('DELETE FROM children WHERE id = ? AND parent_id = ?')
+      .bind(childId, parentId).run();
+    const changed = result?.meta?.changes ?? result?.changes ?? 0;
+    if (!changed) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Child removed successfully' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to delete child', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 // Get parent bookings
 export async function getParentBookings(request, env) {
   try {

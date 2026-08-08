@@ -58,6 +58,10 @@ routes = [
   { pattern = "api-dev.kuddl.co/*", zone_name = "kuddl.co" }
 ]
 
+# Daily settlement payout run (§04) — releases due tranches, settles bookings.
+[env.development.triggers]
+crons = ["0 2 * * *"]
+
 [env.development.vars]
 ENVIRONMENT = "development"
 TWILIO_TEST_MODE = "true"
@@ -84,6 +88,9 @@ workers_dev = false
 routes = [
   { pattern = "api.kuddlkin.co/*", zone_name = "kuddlkin.co" }
 ]
+
+[env.production.triggers]
+crons = ["0 2 * * *"]
 
 [env.production.vars]
 ENVIRONMENT = "production"
