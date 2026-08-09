@@ -664,7 +664,9 @@ export async function createService(request, env) {
         parent_id: serviceId,
         provider_id: providerId,
         batch_name: f.variant_name || f.batch_name || serviceName,
-        mode: f.mode || 'offline',
+        // Bloom sends mode per-batch (sched.mode); other flows still send it
+        // service-wide (f.mode).
+        mode: sched.mode || f.mode || 'offline',
         age_min: f.age_min ?? age_group_min ?? null,
         age_max: f.age_max ?? age_group_max ?? null,
         pincodes: Array.isArray(available_pincodes) ? available_pincodes : [],

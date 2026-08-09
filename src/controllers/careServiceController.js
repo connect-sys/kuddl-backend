@@ -86,8 +86,12 @@ export async function getCareServiceList(request, env) {
     const url = new URL(request.url);
     const subcat = (url.searchParams.get('subcategory') || '').trim().toLowerCase();
 
+    // Care services either carry structured care_pricing (current wizard) or,
+    // for services created before that existed, are just tagged with the Care
+    // category — assembleCare() flags them incomplete rather than silently
+    // excluding them from the query entirely.
     const svcRes = await env.KUDDL_DB
-      .prepare("SELECT * FROM services WHERE status = 'active' AND care_pricing IS NOT NULL ORDER BY created_at DESC LIMIT 60")
+      .prepare("SELECT * FROM services WHERE status = 'active' AND (care_pricing IS NOT NULL OR LOWER(category_id) LIKE '%care%') ORDER BY created_at DESC LIMIT 60")
       .all().catch(() => ({ results: [] }));
     const services = svcRes.results || [];
     if (!services.length) return json({ success: true, data: [] });

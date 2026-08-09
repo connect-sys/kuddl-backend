@@ -55,7 +55,7 @@ name = "kuddl-backend-dev"
 workers_dev = true
 
 routes = [
-  { pattern = "api-dev.kuddl.co/*", zone_name = "kuddl.co" }
+  { pattern = "api-dev.kuddlkin.co/*", zone_name = "kuddlkin.co" }
 ]
 
 # Daily settlement payout run (§04) — releases due tranches, settles bookings.
@@ -87,7 +87,7 @@ name = "kuddl-backend-prod"
 workers_dev = false
 
 routes = [
-  { pattern = "api.kuddlkin.co/*", zone_name = "kuddlkin.co" }
+  { pattern = "api.kuddlkin.co", custom_domain = true }
 ]
 
 [env.production.triggers]

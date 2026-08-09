@@ -46,6 +46,31 @@ function shapeMonthlyPlan(p) {
   };
 }
 
+/**
+ * Legacy fallback: services created before bloom_pricing existed have no
+ * monthly_plans, but their real batches carry their own real price +
+ * price_type (set by the partner at batch creation). Translate each batch's
+ * own price into the monthly-plan shape so these listings render with real
+ * numbers instead of being flagged incomplete. Only per_month / per_session
+ * are translated — per_term / per_camp aren't safely convertible to a
+ * monthly-equivalent without guessing, so those batches are left out.
+ */
+function legacyPlanFromBatch(b) {
+  const price = money(b.price);
+  if (price == null || price <= 0) return null;
+  const days = Array.isArray(b.days) ? b.days : (typeof b.days === 'string' && b.days ? JSON.parse(b.days) : []);
+  const sessionsPerMonth = v.deriveSessionsPerMonth(days);
+  if (!sessionsPerMonth) return null;
+  if (b.price_type === 'per_month') {
+    return { sessionsPerMonth, pricePerMonth: price, perSession: v.derivePerSessionPrice({ pricePerMonth: price, sessionsPerMonth }) };
+  }
+  if (b.price_type === 'per_session') {
+    const pricePerMonth = Math.round(price * sessionsPerMonth);
+    return { sessionsPerMonth, pricePerMonth, perSession: Math.round(price) };
+  }
+  return null;
+}
+
 /** Assemble one batch with derived duration / session-count / total-hours / seats-left. */
 function shapeBatch(b, holidays = []) {
   const ageBand = v.formatAgeBand({ ageMin: b.age_min, ageMax: b.age_max, openAbove: b.open_above });
@@ -90,8 +115,20 @@ export function assembleBloom(raw = {}) {
     ? { isFree: trialPrice === 0, price: trialPrice }
     : null;
 
-  const monthlyPlans = (raw.monthly_plans || []).map(shapeMonthlyPlan).filter(Boolean);
-  const batches = (raw.batches || []).map((b) => shapeBatch(b, raw.holidays || [])).filter((b) => b.ageBand && b.sessionCount);
+  let monthlyPlans = (raw.monthly_plans || []).map(shapeMonthlyPlan).filter(Boolean);
+  // No structured pricing on file → fall back to each real batch's own price.
+  if (monthlyPlans.length === 0) {
+    monthlyPlans = (raw.batches || []).map(legacyPlanFromBatch).filter(Boolean);
+  }
+  // A batch qualifies with a real recurring pattern (days + start/end time)
+  // even when it has no sessionCount — that only exists when both start_date
+  // and end_date are set, which most pre-Batch-Architecture listings never
+  // had (the batch has run on the same weekly pattern since whenever it was
+  // created; there's no real "start date" to report, so none is shown —
+  // never invented). sessionCount is still shown whenever it IS derivable.
+  const batches = (raw.batches || [])
+    .map((b) => shapeBatch(b, raw.holidays || []))
+    .filter((b) => b.ageBand && (b.sessionCount || (b.days.length > 0 && b.startTime && b.endTime)));
 
   const reviewCount = Number(raw.review_count) || 0;
   const rating = reviewCount >= MIN_REVIEWS_TO_SHOW_RATING && Number.isFinite(Number(raw.rating))
@@ -131,6 +168,8 @@ export function assembleBloom(raw = {}) {
     title: s.name || null,
     byLine: provider.business_name ? `by ${provider.business_name}` : null,
     locality,
+    latitude: provider.latitude ?? null,
+    longitude: provider.longitude ?? null,
     ageLabel,
     experienceYears: Number.isFinite(Number(provider.experience_years)) && Number(provider.experience_years) > 0
       ? Number(provider.experience_years) : null,

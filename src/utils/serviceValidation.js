@@ -164,6 +164,19 @@ export function deriveSessionCount({ startDate, endDate, days = [], skipDates = 
   return count;
 }
 
+/**
+ * Approximate sessions/month from a weekly recurrence pattern (avg 4.345
+ * weeks/month, i.e. 30/7 days). Used to translate a legacy batch's own
+ * per-month or per-session price (real values the partner set) into the
+ * other unit — never an invented number, just a unit conversion of what the
+ * partner already charges for their own real weekly schedule.
+ */
+export function deriveSessionsPerMonth(days = []) {
+  const n = new Set((days || []).map(Number)).size;
+  if (!n) return null;
+  return Math.round((n * 30) / 7);
+}
+
 /** Total hours across a batch = sessions × duration. Derived, never typed. */
 export function deriveTotalHours({ sessionCount, sessionDurationMinutes } = {}) {
   const s = Number(sessionCount);
@@ -250,6 +263,7 @@ export default {
   derivePerSessionPrice,
   deriveSessionDurationMinutes,
   deriveSessionCount,
+  deriveSessionsPerMonth,
   deriveTotalHours,
   deriveSeatsLeft,
   validateTrialPrice,

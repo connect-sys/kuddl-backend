@@ -33,7 +33,10 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       age_max: b.age_max,
       open_above: sched.open_above,
       time_of_day: sched.time_of_day,
-      days: sched.days,
+      // The wizard writes `recurrence_days` (see BloomBatchStep's
+      // scheduleFromBatch); `days` was a stale key that never matched, which
+      // silently zeroed out every batch's derived session count.
+      days: sched.recurrence_days || sched.days,
       start_time: sched.start_time,
       end_time: sched.end_time,
       start_date: sched.start_date,
@@ -42,6 +45,11 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       seats: b.total_seats,
       booked_count: b.booked_seats,
       mode: b.mode,
+      // Legacy batches (created before bloom_pricing existed) carry their own
+      // real price directly — assembleBloom() falls back to it when the
+      // service has no structured monthly_plans.
+      price: b.price,
+      price_type: b.price_type,
     };
   });
   return {
@@ -62,6 +70,11 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       city: providerRow.city,
       area: providerRow.area,
       cancellation_policy: providerRow.cancellation_policy,
+      // Real coordinates only when the partner has set them (Google venue
+      // import) — "nearest first" sorting has nothing to fabricate a
+      // distance from otherwise.
+      latitude: providerRow.latitude != null ? Number(providerRow.latitude) : null,
+      longitude: providerRow.longitude != null ? Number(providerRow.longitude) : null,
     },
     trial: bp.trial || null,
     monthly_plans: bp.monthly_plans || [],
@@ -87,9 +100,12 @@ export async function getBloomServiceList(request, env) {
     const url = new URL(request.url);
     const subcat = (url.searchParams.get('subcategory') || '').trim().toLowerCase();
 
-    // Only Bloom services carry bloom_pricing → it's a safe, precise filter.
+    // Bloom services either carry structured bloom_pricing (current wizard) or,
+    // for services created before that existed, are just tagged with the Bloom
+    // category — assembleBloom() falls back to their real batch pricing so
+    // these aren't silently excluded.
     const svcRes = await env.KUDDL_DB
-      .prepare("SELECT * FROM services WHERE status = 'active' AND bloom_pricing IS NOT NULL ORDER BY created_at DESC LIMIT 60")
+      .prepare("SELECT * FROM services WHERE status = 'active' AND (bloom_pricing IS NOT NULL OR LOWER(category_id) LIKE '%bloom%') ORDER BY created_at DESC LIMIT 60")
       .all().catch(() => ({ results: [] }));
     const services = svcRes.results || [];
     if (!services.length) return json({ success: true, data: [] });
