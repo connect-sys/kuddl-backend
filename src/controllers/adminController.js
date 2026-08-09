@@ -588,12 +588,27 @@ export async function updatePartnerVerification(request, env) {
     }
 
     // Update partner verification status and activation
-    const isActive = status === 'approved' || status === 'verified' ? 1 : 0;
+    const verified = status === 'approved' || status === 'verified';
+    const isActive = verified ? 1 : 0;
+    const nowIso = new Date().toISOString();
     await env.KUDDL_DB.prepare(`
-      UPDATE providers 
-      SET kyc_status = ?, is_active = ?, updated_at = ?
+      UPDATE providers
+      SET kyc_status = ?, is_active = ?, is_verified = ?, verification_status = ?, updated_at = ?
       WHERE id = ?
-    `).bind(status, isActive, new Date().toISOString(), partnerId).run();
+    `).bind(status, isActive, verified ? 1 : 0, verified ? 'verified' : (status || 'pending'), nowIso, partnerId).run();
+
+    // Care go-live gating (Screen G): a Care specialist's listing is created
+    // 'submitted' and only goes live once the registration number is verified.
+    // On verification, publish their submitted Care services automatically.
+    if (verified) {
+      await env.KUDDL_DB.prepare(`
+        UPDATE services
+        SET status = 'active', is_verified = 1, updated_at = ?
+        WHERE provider_id = ?
+          AND category_id IN ('cat_care', 'care')
+          AND status = 'submitted'
+      `).bind(nowIso, partnerId).run();
+    }
 
     // Update document verification statuses if provided
     if (documentStatuses) {

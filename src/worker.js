@@ -128,6 +128,10 @@ router.get('/api/care/services', (request, env) => careServiceController.getCare
 router.get('/api/care/service/:id', (request, env) => careServiceController.getCareServiceDetail(request, env));
 router.post('/api/care/bookings/:id/confirm', (request, env) => careBookingController.confirmCareBooking(request, env));
 router.post('/api/care/bookings/:id/decline', (request, env) => careBookingController.declineCareBooking(request, env));
+// Confirm-window timeout sweep (also runs on the cron) — auto-decline + refund
+// Care requests left unanswered past 24h.
+router.get('/api/admin/care/run-timeouts', (request, env) => careBookingController.runCareTimeouts(request, env));
+router.post('/api/admin/care/run-timeouts', (request, env) => careBookingController.runCareTimeouts(request, env));
 router.get('/api/categories', (request, env) => categoriesController.getCategories(request, env));
 router.get('/api/categories/module', (request, env) => categoriesController.getCategoriesByModule(request, env));
 router.get('/api/subcategories', (request, env) => categoriesController.getSubcategories(request, env));
@@ -7637,11 +7641,24 @@ export default {
   // run (§04): releases tranches whose release_date has arrived and settles
   // fully-released bookings. Same job the ops endpoint calls.
   async scheduled(event, env, ctx) {
+    // Care confirm-window timeouts (§07.1): auto-decline + refund any Care
+    // request left unanswered past 24h. Cheap, so it runs on every cron tick.
     try {
-      const result = await settlementController.runPayoutJob(env);
-      console.log('⏱️ settlement payout run:', JSON.stringify(result));
+      const t = await careBookingController.runConfirmWindowTimeouts(env);
+      if (t.refunded) console.log('⏱️ care confirm-window timeouts:', JSON.stringify(t));
     } catch (error) {
-      console.error('❌ scheduled payout run failed:', error.message);
+      console.error('❌ care timeout sweep failed:', error.message);
+    }
+    // Settlement payout is a once-a-day job — only on the 2am tick (the hourly
+    // tick exists for the timeout sweep above). runPayoutJob is idempotent, so
+    // running it on an unknown/legacy cron string is still safe.
+    if (!event?.cron || event.cron === '0 2 * * *') {
+      try {
+        const result = await settlementController.runPayoutJob(env);
+        console.log('⏱️ settlement payout run:', JSON.stringify(result));
+      } catch (error) {
+        console.error('❌ scheduled payout run failed:', error.message);
+      }
     }
   },
 

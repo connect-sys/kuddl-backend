@@ -24,16 +24,18 @@ export const MODULES = ['ADVENTURE', 'BLOOM', 'CARE', 'DISCOVER'];
  * Order is the display order.
  */
 export const SUBCATEGORIES = {
+  // Labels match Partner Form Mockups v2 screen E/F (and the DB subcategory
+  // display names). Kept in sync with kuddl-partner-web config/adventureFlow.ts.
   ADVENTURE: [
-    'Entertainment & Live Performers',
-    'Party Hosts & Anchors',
-    'Photography — Event Coverage',
-    'Photography — Studio & Milestone',
-    'Bouncies & Game Zones',
-    'Play-Venue Party Packages',
-    'Return Favors',
-    'DIY Stations',
-    'Premium Add-ons',
+    'Performer',
+    'Party host / anchor',
+    'Photography — event coverage',
+    'Photography — studio / milestone',
+    'Bouncy / games zone',
+    'Play-venue package',
+    'Return favors',
+    'DIY station',
+    'Premium add-on',
   ],
   BLOOM: [
     'Sports Coaching',

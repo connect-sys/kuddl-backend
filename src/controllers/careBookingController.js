@@ -60,6 +60,54 @@ export async function confirmCareBooking(request, env) {
   }
 }
 
+/**
+ * Confirm-window timeout sweep (§07.1) — the "no response = auto-decline +
+ * automatic full refund" rule. Any Care booking still `awaiting_confirmation`
+ * 24h after it was created times out through the SAME path as an explicit
+ * decline (PAID_HOLD --CONFIRM_TIMEOUT--> refunded, auto_refund effects).
+ *
+ * Called by the scheduled() cron and by POST /api/admin/care/run-timeouts.
+ * Returns { checked, refunded }.
+ */
+export async function runConfirmWindowTimeouts(env) {
+  const rows = (await env.KUDDL_DB.prepare(
+    `SELECT id, parent_id, provider_id, total_amount, created_at
+       FROM bookings
+      WHERE status = 'awaiting_confirmation'
+        AND datetime(created_at, '+24 hours') <= datetime('now')`
+  ).all()).results || [];
+
+  let refunded = 0;
+  for (const b of rows) {
+    try {
+      const r = transition(STATES.PAID_HOLD, EVENTS.CONFIRM_TIMEOUT);
+      // Guarded UPDATE: only flips if still awaiting (avoids racing a live confirm).
+      const res = await env.KUDDL_DB.prepare(
+        `UPDATE bookings SET status = ?, payment_status = ?, updated_at = ?
+          WHERE id = ? AND status = 'awaiting_confirmation'`
+      ).bind('refunded', 'refunded', new Date().toISOString(), b.id).run();
+      if (!res.meta || res.meta.changes === 0) continue; // someone confirmed first
+      await executeBookingEffects(env, r.effects, {
+        bookingId: b.id, parentId: b.parent_id, providerId: b.provider_id, amount: b.total_amount,
+      });
+      refunded++;
+    } catch (err) {
+      console.error('confirm-window timeout failed for', b.id, err?.message);
+    }
+  }
+  return { checked: rows.length, refunded };
+}
+
+/** Manual trigger for the timeout sweep (admin/testing). */
+export async function runCareTimeouts(request, env) {
+  try {
+    const result = await runConfirmWindowTimeouts(env);
+    return json({ success: true, ...result });
+  } catch (error) {
+    return json({ success: false, message: 'Timeout sweep failed', error: error.message }, 500);
+  }
+}
+
 export async function declineCareBooking(request, env) {
   try {
     const id = bookingIdFromUrl(request);

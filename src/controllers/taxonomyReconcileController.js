@@ -93,8 +93,9 @@ export async function reconcileTaxonomy(request, env) {
     if (removedSubIds.length) {
       const placeholders = removedSubIds.map(() => '?').join(',');
       if (svcCols.includes('subcategory_id')) {
-        // Unpublish (archive) — deferred, not deleted.
-        const setStatus = svcCols.includes('status') ? "status = 'archived'" : null;
+        // Unpublish — deferred, not deleted. ('inactive' is the value the live
+        // services.status CHECK allows; 'archived' is rejected by the constraint.)
+        const setStatus = svcCols.includes('status') ? "status = 'inactive'" : null;
         const setActive = svcCols.includes('is_active') ? 'is_active = 0' : null;
         const setClause = [setStatus, setActive].filter(Boolean).join(', ');
         if (setClause) {

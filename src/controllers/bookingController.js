@@ -361,7 +361,7 @@ export async function createBooking(request, env) {
       payment_status: initialPaymentStatus,
       created_at: new Date().toISOString()
     };
-    const invoicePageUrl = `https://kuddl.co/invoice/${invoiceId}`;
+    const invoicePageUrl = `https://kuddlkin.co/invoice/${invoiceId}`;
     const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl)}&size=300x300&format=png`;
 
     const durationHours = durationMinutes / 60;
@@ -1068,7 +1068,7 @@ export async function acceptBooking(request, env) {
     let invoiceQrUrl = booking.invoice_qr_url;
     if (!invoiceId) {
       invoiceId = `INV-${Date.now()}`;
-      const invoicePageUrl2 = `https://kuddl.co/invoice/${invoiceId}`;
+      const invoicePageUrl2 = `https://kuddlkin.co/invoice/${invoiceId}`;
       invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl2)}&size=300x300&format=png`;
       await env.KUDDL_DB.prepare(`UPDATE bookings SET invoice_id = ?, invoice_qr_url = ? WHERE id = ?`).bind(invoiceId, invoiceQrUrl, bookingId).run();
     }

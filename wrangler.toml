@@ -60,7 +60,8 @@ routes = [
 
 # Daily settlement payout run (§04) — releases due tranches, settles bookings.
 [env.development.triggers]
-crons = ["0 2 * * *"]
+# 2am = daily settlement payout; hourly = Care confirm-window timeout sweep (§07.1).
+crons = ["0 2 * * *", "0 * * * *"]
 
 [env.development.vars]
 ENVIRONMENT = "development"

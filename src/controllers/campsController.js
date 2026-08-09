@@ -589,7 +589,7 @@ export async function bookCamp(request, env) {
     };
 
     // QR encodes a public Kuddl invoice page URL — scanning opens the booking details page
-    const invoicePageUrl = `https://kuddl.co/invoice/${invoiceId}`;
+    const invoicePageUrl = `https://kuddlkin.co/invoice/${invoiceId}`;
     const invoiceQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(invoicePageUrl)}&size=300x300&format=png`;
 
     await env.KUDDL_DB.prepare(`
