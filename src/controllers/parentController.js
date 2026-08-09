@@ -605,13 +605,53 @@ export async function addChild(request, env) {
       }
     }
 
+    // ── Duplicate-child guard ────────────────────────────────────────────
+    // A parent may not create two children with the SAME name + SAME age.
+    // Age is derived from each stored DOB (DD-MM-YYYY or ISO), so this catches
+    // duplicates even when DOB was entered vs. calculated-from-age.
+    const ageFromDob = (raw) => {
+      if (!raw) return null;
+      let d;
+      if (typeof raw === 'string' && raw.includes('-')) {
+        const p = raw.split('-');
+        d = (p.length === 3 && p[0].length === 2) ? new Date(`${p[2]}-${p[1]}-${p[0]}`) : new Date(raw);
+      } else {
+        d = new Date(raw);
+      }
+      if (isNaN(d.getTime())) return null;
+      const now = new Date();
+      let y = now.getFullYear() - d.getFullYear();
+      const m = now.getMonth() - d.getMonth();
+      if (m < 0 || (m === 0 && now.getDate() < d.getDate())) y--;
+      return Math.max(y, 0);
+    };
+    try {
+      const existingKids = await env.KUDDL_DB.prepare(
+        `SELECT id, name, date_of_birth FROM children
+         WHERE parent_id = ? AND COALESCE(is_active, 1) = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))`
+      ).bind(parentId, childName).all();
+      const dup = (existingKids.results || []).find((r) => {
+        const a = ageFromDob(r.date_of_birth);
+        return a != null && ageValue != null && Number(a) === Number(ageValue);
+      });
+      if (dup) {
+        return addCorsHeaders(new Response(JSON.stringify({
+          success: false,
+          message: `A child named "${childName}" (age ${ageValue}) already exists in your account.`,
+          code: 'DUPLICATE_CHILD',
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } }));
+      }
+    } catch (dupErr) {
+      console.warn('Duplicate-child check failed (continuing):', dupErr?.message);
+    }
+
     const childId = generateId();
-    
-    console.log('💾 Inserting child:', { 
-      childId, 
-      parentId, 
-      childName, 
-      ageValue, 
+
+    console.log('💾 Inserting child:', {
+      childId,
+      parentId,
+      childName,
+      ageValue,
       dobForDB,
       gender: childData.gender
     });
