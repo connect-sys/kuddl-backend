@@ -91,7 +91,8 @@ routes = [
 ]
 
 [env.production.triggers]
-crons = ["0 2 * * *"]
+# 2am = daily settlement payout; hourly = Care confirm-window timeout sweep (§07.1).
+crons = ["0 2 * * *", "0 * * * *"]
 
 [env.production.vars]
 ENVIRONMENT = "production"

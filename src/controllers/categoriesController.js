@@ -19,9 +19,12 @@ export const getCategories = async (request, env) => {
     console.log('📊 Categories result:', categoriesResult);
     const categories = categoriesResult.results || [];
 
-    // Get all subcategories
+    // Only active subcategories — matches getSubcategories(), and keeps
+    // deactivated/legacy rows out of every picker that hangs off this
+    // endpoint (they were being shown alongside the real, current list).
     const subcategoriesResult = await env.KUDDL_DB.prepare(`
-      SELECT * FROM subcategories 
+      SELECT * FROM subcategories
+      WHERE is_active = 1
       ORDER BY category_id, name ASC
     `).all();
 

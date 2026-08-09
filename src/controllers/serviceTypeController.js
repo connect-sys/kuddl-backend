@@ -196,12 +196,19 @@ export const CATEGORY_LABEL = {
 };
 
 // Helper used by registration flow to compute ABCD tags from selected service type IDs.
+// Reads the canonical `subcategories` table (category_id like "cat_adventure")
+// — the same source every picker in the app now uses — instead of the
+// separately-maintained service_type_registry table, which drifted out of
+// sync with real partner data (most ids partners actually picked weren't in
+// it at all).
 export const deriveCategoriesFromServiceTypes = async (env, serviceTypeIds) => {
   if (!serviceTypeIds || serviceTypeIds.length === 0) return [];
   const placeholders = serviceTypeIds.map(() => '?').join(',');
   const result = await env.KUDDL_DB.prepare(
-    `SELECT DISTINCT category FROM service_type_registry WHERE id IN (${placeholders}) AND is_active = 1`
+    `SELECT DISTINCT category_id FROM subcategories WHERE id IN (${placeholders}) AND is_active = 1`
   ).bind(...serviceTypeIds).all();
   const rows = result.results || [];
-  return rows.map((r) => CATEGORY_LABEL[r.category]).filter(Boolean);
+  return rows
+    .map((r) => CATEGORY_LABEL[String(r.category_id || '').replace(/^cat_/, '')])
+    .filter(Boolean);
 };

@@ -654,36 +654,52 @@ export async function createService(request, env) {
       }
     }
 
-    // Camp Architecture v2.0 — create Batch #1 from the wizard payload.
+    // Camp Architecture v2.0 — create ONE batch row per wizard schedule.
+    // Bloom sends multiple batches (features.schedules); each is a separately
+    // bookable batch with its OWN age band / time / days / seats / mode, so the
+    // customer detail (which reads the batches table) shows every one of them.
+    // Other flows send a single schedule (or none) and still get one batch.
     let batchId = null;
+    const batchIds = [];
     try {
       const f = (typeof features === 'object' && features) || {};
-      const sched = Array.isArray(f.schedules) ? f.schedules[0] : (f.schedule || {});
-      batchId = await insertBatch(env, {
-        parent_type: 'service',
-        parent_id: serviceId,
-        provider_id: providerId,
-        batch_name: f.variant_name || f.batch_name || serviceName,
-        // Bloom sends mode per-batch (sched.mode); other flows still send it
-        // service-wide (f.mode).
-        mode: sched.mode || f.mode || 'offline',
-        age_min: f.age_min ?? age_group_min ?? null,
-        age_max: f.age_max ?? age_group_max ?? null,
-        pincodes: Array.isArray(available_pincodes) ? available_pincodes : [],
-        total_seats: f.cohort_capacity ?? f.per_session_capacity ?? null,
-        per_session_override: f.cohort_capacity ? (f.per_session_capacity ?? null) : null,
-        cancellation_policy: cancellation_policy || 'flexible',
-        booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
-        instructor: f.instructor || null,
-        what_to_bring: f.what_to_bring || null,
-        price: parseFloat(price) || 0,
-        price_type: price_type || null,
-        schedule: sched || {},
-        features: f,
-        status: 'live',
-      });
+      const scheds = Array.isArray(f.schedules) && f.schedules.length
+        ? f.schedules
+        : [f.schedule || {}];
+      for (const sched of scheds) {
+        // Bloom writes mode(s) per-batch as `modes` (['offline'] / ['offline','online']);
+        // older/other flows send a service-wide `mode`.
+        const modes = Array.isArray(sched.modes) ? sched.modes : null;
+        const mode = modes
+          ? (modes.length >= 2 ? 'hybrid' : (modes[0] || 'offline'))
+          : (sched.mode || f.mode || 'offline');
+        const bId = await insertBatch(env, {
+          parent_type: 'service',
+          parent_id: serviceId,
+          provider_id: providerId,
+          batch_name: sched.name || f.variant_name || f.batch_name || serviceName,
+          mode,
+          // Per-batch age band (Bloom "banded"); fall back to the service age.
+          age_min: sched.age_min ?? f.age_min ?? age_group_min ?? null,
+          age_max: sched.age_max ?? f.age_max ?? age_group_max ?? null,
+          pincodes: Array.isArray(available_pincodes) ? available_pincodes : [],
+          total_seats: sched.capacity_override ?? f.cohort_capacity ?? f.per_session_capacity ?? null,
+          per_session_override: null,
+          cancellation_policy: cancellation_policy || 'flexible',
+          booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
+          instructor: sched.instructor || f.instructor || null,
+          what_to_bring: f.what_to_bring || null,
+          price: parseFloat(price) || 0,
+          price_type: price_type || null,
+          schedule: sched || {},
+          features: f,
+          status: 'live',
+        });
+        batchIds.push(bId);
+      }
+      batchId = batchIds[0] || null;
     } catch (batchError) {
-      console.error('⚠️ Service created but Batch #1 insert failed:', batchError);
+      console.error('⚠️ Service created but batch insert failed:', batchError);
     }
 
     return addCorsHeaders(new Response(JSON.stringify({
@@ -1924,6 +1940,9 @@ export async function updateService(request, env) {
       'cancellation_policy', 'service_type_id',
       'special_requirements', 'status',
       'partner_approved',
+      // Category money-shape blobs — without these, editing the trial / monthly
+      // plan / makeup / party variants / care fields silently saved nothing.
+      'bloom_pricing', 'adventure_pricing', 'care_pricing',
     ];
     // Resolve subcategory by id / slug / name (or the human-readable label)
     // so a synthetic id from the wizard still maps to a real subcategory row.
@@ -1954,6 +1973,12 @@ export async function updateService(request, env) {
       let value = updateData[field];
       if (field === 'features' || field === 'image_urls' || field === 'available_pincodes') {
         value = JSON.stringify(value ?? (Array.isArray(updateData[field]) ? [] : {}));
+      } else if (
+        (field === 'bloom_pricing' || field === 'adventure_pricing' || field === 'care_pricing')
+        && value != null && typeof value === 'object'
+      ) {
+        // These are TEXT/JSON columns; a raw object can't be bound to D1.
+        value = JSON.stringify(value);
       }
       updates.push(`${field} = ?`);
       values.push(value);
@@ -1976,6 +2001,72 @@ export async function updateService(request, env) {
     const updatedService = await env.KUDDL_DB.prepare(
       'SELECT * FROM services WHERE id = ?'
     ).bind(serviceId).first();
+
+    // Camp Architecture v2.0 — re-sync the batches table on edit. The wizard
+    // owns batches inside features.schedules, but the customer detail reads the
+    // separate batches table, so an edit that changes schedules must rewrite
+    // those rows or the customer keeps seeing the stale (or collapsed) batch
+    // set. Only runs when the edit actually carries schedules, so status-only
+    // edits never touch batches. booked_seats is preserved by position.
+    try {
+      const f = (updateData.features && typeof updateData.features === 'object')
+        ? updateData.features : null;
+      const scheds = f && Array.isArray(f.schedules) && f.schedules.length
+        ? f.schedules : null;
+      if (scheds) {
+        const existing = await env.KUDDL_DB.prepare(
+          'SELECT booked_seats FROM batches WHERE parent_type = ? AND parent_id = ? ORDER BY created_at ASC'
+        ).bind('service', serviceId).all();
+        const prevBooked = (existing?.results || []).map(r => r.booked_seats ?? 0);
+
+        await env.KUDDL_DB.prepare(
+          'DELETE FROM batches WHERE parent_type = ? AND parent_id = ?'
+        ).bind('service', serviceId).run();
+
+        let pincodes = [];
+        if (Array.isArray(updateData.available_pincodes)) {
+          pincodes = updateData.available_pincodes;
+        } else if (updatedService.available_pincodes) {
+          try { pincodes = JSON.parse(updatedService.available_pincodes) || []; } catch { pincodes = []; }
+        }
+        const svcPrice = updateData.price ?? updatedService.price;
+        const svcPriceType = updateData.price_type ?? updatedService.price_type;
+        const svcCancel = updateData.cancellation_policy || updatedService.cancellation_policy || 'flexible';
+
+        let idx = 0;
+        for (const sched of scheds) {
+          const modes = Array.isArray(sched.modes) ? sched.modes : null;
+          const mode = modes
+            ? (modes.length >= 2 ? 'hybrid' : (modes[0] || 'offline'))
+            : (sched.mode || f.mode || 'offline');
+          await insertBatch(env, {
+            parent_type: 'service',
+            parent_id: serviceId,
+            provider_id: service.provider_id || providerId,
+            batch_name: sched.name || f.variant_name || f.batch_name || updatedService.name || '',
+            mode,
+            age_min: sched.age_min ?? f.age_min ?? null,
+            age_max: sched.age_max ?? f.age_max ?? null,
+            pincodes,
+            total_seats: sched.capacity_override ?? f.cohort_capacity ?? f.per_session_capacity ?? null,
+            per_session_override: null,
+            cancellation_policy: svcCancel,
+            booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
+            instructor: sched.instructor || f.instructor || null,
+            what_to_bring: f.what_to_bring || null,
+            price: parseFloat(svcPrice) || 0,
+            price_type: svcPriceType || null,
+            schedule: sched || {},
+            features: f,
+            status: 'live',
+            booked_seats: prevBooked[idx] ?? 0,
+          });
+          idx++;
+        }
+      }
+    } catch (batchError) {
+      console.error('⚠️ Service updated but batch re-sync failed:', batchError);
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
