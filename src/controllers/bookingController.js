@@ -326,9 +326,16 @@ export async function createBooking(request, env) {
     }
 
     const isPaid = (paymentStatus === 'completed' || paymentStatus === 'paid');
+    // Interim (no payment gateway is wired on the customer web yet): an instant
+    // booking (Bloom/Adventure) is CONFIRMED on creation so the Start OTP is
+    // issued immediately and shown to the parent, who reads it out to the
+    // partner at service start. Care still books as a request (money held) only
+    // when actually paid. Once real payment capture lands, drop the
+    // `bookingModel === 'instant'` clause and rely on isPaid alone.
+    const confirmNow = isPaid || bookingModel === 'instant';
     let machineState = STATES.PENDING_PAYMENT;
     let effects = [];
-    if (isPaid) {
+    if (confirmNow) {
       const r = transition(STATES.PENDING_PAYMENT, EVENTS.PAY_SUCCESS, { bookingModel });
       machineState = r.state;
       effects = r.effects;
@@ -399,8 +406,9 @@ export async function createBooking(request, env) {
     }
 
     // Schedule settlement tranches (§04) for an instantly-confirmed booking.
-    // Care schedules later, when the specialist confirms.
-    if (machineState === STATES.CONFIRMED) {
+    // Care schedules later, when the specialist confirms. Gated on isPaid so an
+    // interim confirm-on-book (unpaid, pay-at-venue) never schedules a payout.
+    if (machineState === STATES.CONFIRMED && isPaid) {
       const today = new Date().toISOString().slice(0, 10);
       await scheduleSettlement(env, {
         bookingId, providerId, category: serviceCategory,
@@ -457,6 +465,19 @@ export async function createBooking(request, env) {
       console.error('❌ Failed to send booking notification:', notificationError);
     }
 
+    // Surface the Start OTP to the customer immediately (the parent reads it out
+    // to the partner at service start). Present only once the booking is
+    // confirmed and generate_start_otp has run.
+    let startOtp = null;
+    try {
+      const otpRow = await env.KUDDL_DB.prepare(
+        "SELECT otp_code FROM booking_otps WHERE booking_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
+      ).bind(bookingId).first();
+      startOtp = otpRow?.otp_code || null;
+    } catch (e) {
+      console.warn('start otp lookup failed (non-fatal):', e?.message);
+    }
+
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
       message: 'Booking created successfully',
@@ -469,7 +490,8 @@ export async function createBooking(request, env) {
         status: initialStatus,
         invoice_id: invoiceId,
         invoice_qr_url: invoiceQrUrl,
-        invoice_data: invoiceData
+        invoice_data: invoiceData,
+        start_otp: startOtp
       }
     }), {
       headers: { 'Content-Type': 'application/json' }
@@ -848,13 +870,14 @@ export async function getCustomerBookings(request, env) {
     }
 
     const bookings = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         b.*,
         s.name as service_name, s.price_type, s.price,
         p.first_name as provider_first_name, p.last_name as provider_last_name,
         p.profile_image_url as provider_image,
         p.business_name,
-        parent.fullname as parent_name, parent.phone as parent_phone, parent.email as parent_email
+        parent.fullname as parent_name, parent.phone as parent_phone, parent.email as parent_email,
+        (SELECT otp_code FROM booking_otps bo WHERE bo.booking_id = b.id AND bo.status = 'active' ORDER BY bo.created_at DESC LIMIT 1) as start_otp
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers p ON b.provider_id = p.id
