@@ -1971,8 +1971,9 @@ export async function updateService(request, env) {
     for (const field of editableFields) {
       if (updateData[field] === undefined) continue;
       let value = updateData[field];
-      if (field === 'features' || field === 'image_urls' || field === 'available_pincodes') {
-        value = JSON.stringify(value ?? (Array.isArray(updateData[field]) ? [] : {}));
+      const jsonFields = ['features', 'image_urls', 'available_pincodes', 'bloom_pricing', 'adventure_pricing', 'care_pricing'];
+      if (jsonFields.includes(field)) {
+        value = typeof value === 'string' ? value : JSON.stringify(value ?? (Array.isArray(updateData[field]) ? [] : {}));
       } else if (
         (field === 'bloom_pricing' || field === 'adventure_pricing' || field === 'care_pricing')
         && value != null && typeof value === 'object'
@@ -1997,6 +1998,50 @@ export async function updateService(request, env) {
     await env.KUDDL_DB.prepare(
       `UPDATE services SET ${updates.join(', ')} WHERE id = ?`
     ).bind(...values).run();
+
+    // Re-sync batches from the wizard's features.schedules so edits to batches
+    // (add / change / remove) actually reach the customer read path (which reads
+    // the batches table). Archive the current live batches — existing bookings
+    // keep their (now archived) batch row — then recreate one per schedule.
+    try {
+      const feats = updateData.features && typeof updateData.features === 'object'
+        ? updateData.features
+        : (typeof updateData.features === 'string' ? JSON.parse(updateData.features) : null);
+      if (feats && Array.isArray(feats.schedules) && feats.schedules.length) {
+        await env.KUDDL_DB.prepare(
+          "UPDATE batches SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE parent_type = 'service' AND parent_id = ? AND status != 'archived'"
+        ).bind(serviceId).run();
+        const pincodes = Array.isArray(updateData.available_pincodes) ? updateData.available_pincodes : [];
+        const priceNum = parseFloat(updateData.price) || 0;
+        for (const sched of feats.schedules) {
+          const modes = Array.isArray(sched.modes) ? sched.modes : null;
+          const mode = modes ? (modes.length >= 2 ? 'hybrid' : (modes[0] || 'offline')) : (sched.mode || feats.mode || 'offline');
+          await insertBatch(env, {
+            parent_type: 'service',
+            parent_id: serviceId,
+            provider_id: service.provider_id,
+            batch_name: sched.name || feats.variant_name || updateData.name || 'Batch',
+            mode,
+            age_min: sched.age_min ?? feats.age_min ?? null,
+            age_max: sched.age_max ?? feats.age_max ?? null,
+            pincodes,
+            total_seats: sched.capacity_override ?? null,
+            per_session_override: null,
+            cancellation_policy: updateData.cancellation_policy || 'flexible',
+            booking_cutoff_hours: feats.booking_cutoff_hours ?? 24,
+            instructor: sched.instructor || feats.instructor || null,
+            what_to_bring: feats.what_to_bring || null,
+            price: priceNum,
+            price_type: updateData.price_type || null,
+            schedule: sched || {},
+            features: feats,
+            status: 'live',
+          });
+        }
+      }
+    } catch (batchSyncErr) {
+      console.error('⚠️ Batch re-sync on update failed:', batchSyncErr?.message);
+    }
 
     const updatedService = await env.KUDDL_DB.prepare(
       'SELECT * FROM services WHERE id = ?'

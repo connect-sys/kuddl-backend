@@ -329,10 +329,17 @@ export async function updateParentProfile(request, env) {
       
       console.log('🔍 Using normalized phone:', normalizedPhone);
       
-      // Find existing parent first
+      // Find the existing parent using the SAME resolution getParentProfile
+      // uses (phone-suffix match, oldest row first). Matching by exact
+      // `phone = normalizedPhone` used to miss rows stored as "+91…", which
+      // silently CREATED a duplicate parent — the update then landed on the
+      // duplicate while the GET kept reading the original, so edits never showed.
+      const phone10 = normalizedPhone.length > 10 ? normalizedPhone.slice(-10) : normalizedPhone;
       const existingParent = await env.KUDDL_DB.prepare(`
-        SELECT id FROM parents WHERE phone = ?
-      `).bind(normalizedPhone).first();
+        SELECT id FROM parents
+        WHERE phone LIKE ? OR phone LIKE ? OR phone = ?
+        ORDER BY created_at ASC LIMIT 1
+      `).bind(`%${phone10}`, phone10, updateData.phone || normalizedPhone).first();
       
       if (existingParent) {
         parentId = existingParent.id;
