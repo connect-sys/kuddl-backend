@@ -46,12 +46,20 @@ export async function getParentProfile(request, env) {
       const parentRow = await env.KUDDL_DB.prepare(`SELECT phone FROM parents WHERE id = ?`).bind(tokenId).first();
       if (parentRow) phone = parentRow.phone;
     }
-    
+
+    // Google-signup accounts store a `g:<googleId>` placeholder in `phone`.
+    // Its digits are meaningless — stripping them and doing a LIKE match used to
+    // return a RANDOM unrelated parent (whoever shared those digits), so the
+    // logged-in user saw a blank / someone else's profile. Ignore such
+    // placeholders (and anything that isn't a real 10-digit number) and fall
+    // through to the authoritative token-id lookup below.
+    if (phone && String(phone).startsWith('g:')) phone = null;
+
     const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
     const phone10 = phoneDigits.length > 10 ? phoneDigits.slice(-10) : phoneDigits;
-    
-    // Find parent by phone (get the one with most data)
-    if (phone10) {
+
+    // Find parent by phone (get the one with most data) — real phones only.
+    if (phone10 && phone10.length >= 10) {
       const parentRow = await env.KUDDL_DB.prepare(`
         SELECT id FROM parents 
         WHERE phone LIKE ? OR phone LIKE ? OR phone = ?
