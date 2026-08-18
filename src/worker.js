@@ -2955,6 +2955,11 @@ router.post('/api/parent/upload-profile-picture', async (request, env) => {
   return parentController.uploadParentProfilePicture(request, env);
 });
 
+// Upload a child avatar → returns { url }; the child record stores it on save.
+router.post('/api/parent/upload-child-picture', async (request, env) => {
+  return parentController.uploadChildPicture(request, env);
+});
+
 router.get('/api/parent/children', async (request, env) => {
   return parentController.getParentChildren(request, env);
 });

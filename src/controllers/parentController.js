@@ -1332,6 +1332,49 @@ export async function uploadParentProfilePicture(request, env) {
   }
 }
 
+// Upload an image for the authenticated parent (used for a CHILD avatar) and
+// return its public URL. Unlike uploadParentProfilePicture this does NOT mutate
+// any row — the caller stores the returned url on the child record when it
+// saves. Auth mirrors addChild (jwt.verify with JWT_SECRET).
+export async function uploadChildPicture(request, env) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization token required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const token = authHeader.substring(7);
+    const isValid = await jwt.verify(token, env.JWT_SECRET);
+    if (!isValid) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const decoded = jwt.decode(token);
+    const parentId = decoded.payload.id;
+
+    const formData = await request.formData();
+    const file = formData.get('file');
+    if (!file || !file.size) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'No file provided' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'File size must be less than 5MB' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Only JPEG, PNG, and WebP images are allowed' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const fileExtension = (file.name.split('.').pop() || 'jpg');
+    const fileName = `parents/${parentId}/children/child-${Date.now()}.${fileExtension}`;
+    await env.KUDDL_STORAGE.put(fileName, file.stream(), { httpMetadata: { contentType: file.type } });
+    const publicUrl = `${env.R2_PUBLIC_URL}/${fileName}`;
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, url: publicUrl }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('❌ Upload child picture error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to upload image: ' + error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Delete the signed-in customer's account (App Store Guideline 5.1.1(v)).
 // Removes the parent/user record, profile, children and saved data, then the
