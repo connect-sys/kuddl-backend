@@ -667,12 +667,21 @@ export async function createService(request, env) {
         ? f.schedules
         : [f.schedule || {}];
       for (const sched of scheds) {
-        // Bloom writes mode(s) per-batch as `modes` (['offline'] / ['offline','online']);
-        // older/other flows send a service-wide `mode`.
+        // Bloom v3 · Part A: mode is single-select per batch. Accept the new
+        // single `sched.mode`, else fall back to the legacy `modes` array or a
+        // service-wide mode.
         const modes = Array.isArray(sched.modes) ? sched.modes : null;
-        const mode = modes
+        const mode = sched.mode
+          ? sched.mode
+          : modes
           ? (modes.length >= 2 ? 'hybrid' : (modes[0] || 'offline'))
-          : (sched.mode || f.mode || 'offline');
+          : (f.mode || 'offline');
+        // Bloom v3: price + sessions live on the batch. Fall back to the
+        // service-level values so older single-price flows keep working.
+        const batchPrice = sched.price_per_month ?? sched.price ?? (parseFloat(price) || 0);
+        const batchSessions = sched.sessions_per_month ?? f.sessions_per_month ?? null;
+        const classType = sched.class_type === 'solo' ? 'solo' : 'group';
+        const scheduleType = sched.schedule_type === 'teacher_scheduled' ? 'teacher_scheduled' : 'fixed';
         const bId = await insertBatch(env, {
           parent_type: 'service',
           parent_id: serviceId,
@@ -689,8 +698,11 @@ export async function createService(request, env) {
           booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
           instructor: sched.instructor || f.instructor || null,
           what_to_bring: f.what_to_bring || null,
-          price: parseFloat(price) || 0,
-          price_type: price_type || null,
+          price: batchPrice,
+          price_type: price_type || 'per_month',
+          class_type: classType,
+          sessions_per_month: batchSessions,
+          schedule_type: scheduleType,
           schedule: sched || {},
           features: f,
           status: 'live',

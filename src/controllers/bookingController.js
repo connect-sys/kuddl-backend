@@ -50,7 +50,7 @@ export async function createBooking(request, env) {
 
     const {
       serviceId,
-      providerId,
+      providerId: providerIdFromClient,
       selectedDate,
       selectedEndDate,
       startTime,
@@ -63,6 +63,9 @@ export async function createBooking(request, env) {
       paymentStatus,
       paymentId,
       orderId,
+      // 'trial' | 'enrollment' — a trial booking is distinct from an enrolment
+      // in the customer's bookings (Build Spec v3 · B3).
+      bookingType,
       // Camp Architecture v2.0 — optional batch this booking is for.
       batchId
     } = await request.json();
@@ -100,6 +103,21 @@ export async function createBooking(request, env) {
         }
       } catch (phoneError) {
         console.error('❌ Failed to create/find parent by phone:', phoneError);
+      }
+    }
+
+    // Resolve the real provider from the services table when the client didn't
+    // send one. The structured Adventure/Care/Bloom listings are synthesized on
+    // the customer web without a provider_id (their read endpoints don't expose
+    // it), so serviceId is the authoritative source. This also guarantees the
+    // booking links the correct provider for notifications and settlement.
+    let providerId = providerIdFromClient || null;
+    if (!providerId && serviceId) {
+      try {
+        const svcRow = await env.KUDDL_DB.prepare('SELECT provider_id FROM services WHERE id = ?').bind(serviceId).first();
+        if (svcRow && svcRow.provider_id) providerId = svcRow.provider_id;
+      } catch (e) {
+        console.warn('provider_id resolution failed:', e?.message);
       }
     }
 
@@ -304,6 +322,8 @@ export async function createBooking(request, env) {
       parentDetails,
       children: children || [],
       specialInstructions: specialInstructions || '',
+      // Trial vs enrolment (B3) — persisted so My Bookings can label it.
+      bookingType: bookingType === 'trial' ? 'trial' : 'enrollment',
       recurring: recurring || false,
       // Period services (monthly/weekly/session/batch/term) carry an end date so
       // the booking reflects the full time frame, not just the start day.
@@ -568,6 +588,7 @@ export async function getBookingConfirmedView(request, env) {
     const data = {
       id: booking.id,
       status: booking.status,
+      bookingType: details.bookingType === 'trial' ? 'trial' : 'enrollment',
       serviceTitle: service.name || null,
       providerName: provider.business_name || null,
       date: booking.selected_date || booking.booking_date || null,

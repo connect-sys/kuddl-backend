@@ -108,13 +108,18 @@ describe('Bloom publishing gate', () => {
     expect(r.canPublish).toBe(false);
     expect(r.missing.length).toBeGreaterThan(0);
   });
-  it('passes when complete', () => {
+  it('passes when complete (v3 — batch carries its own price, no makeup/plan)', () => {
     const r = v.bloomPublishGate({
       trial_offered: true,
-      monthly_plans: [{ sessions_per_month: 8, price_per_month: 3200 }],
-      makeup_policy: 'teacher_discretion',
-      batches: [{ age_min: 5, days: [2, 4], start_time: '17:00', end_time: '18:00', start_date: '2026-08-06' }],
+      batches: [{ age_min: 5, price_per_month: 6500, days: [2, 4], start_time: '17:00', end_time: '18:00', start_date: '2026-08-06' }],
     });
     expect(r.canPublish).toBe(true);
+  });
+  it('blocks a batch with no price (v3)', () => {
+    const r = v.bloomPublishGate({
+      trial_offered: true,
+      batches: [{ age_min: 5, days: [2, 4], start_time: '17:00', end_time: '18:00', start_date: '2026-08-06' }],
+    });
+    expect(r.canPublish).toBe(false);
   });
 });

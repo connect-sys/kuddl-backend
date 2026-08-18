@@ -24,24 +24,54 @@ const base = () => ({
 });
 
 describe('assembleBloom — real values only', () => {
-  it('derives per-session, schedule, seats-left; shows locality + Kuddl Curated', () => {
+  it('derives per-session, schedule, seats-left; batch carries its own price; no makeup/badge (v3)', () => {
     const b = assembleBloom(base());
     expect(b.title).toBe('MDFC — Kids Dance');
     expect(b.byLine).toBe('by My Dance & Fitness Centre');
     expect(b.locality).toBe('Sector 50'); // never a pincode
-    expect(b.monthlyPlans[0].perSession).toBe(400); // 3200 / 8, derived
     expect(b.fromPerSession).toBe(400);
     expect(b.registrationFee).toBe(500);
     expect(b.cancellationSentence).toBe('Free cancellation until 24 hours before.');
-    expect(b.makeupSentence).toMatch(/teacher/i);
-    expect(b.badge).toBe('Kuddl Curated');
+    // v3 · C2/C12 — makeup and the "Kuddl Curated" badge are gone.
+    expect(b.makeupSentence).toBeUndefined();
+    expect(b.badge).toBeUndefined();
     const batch = b.batches[0];
     expect(batch.ageBand).toBe('Ages 5–8');
     expect(batch.durationMinutes).toBe(60);
     expect(batch.sessionCount).toBe(9);
     expect(batch.totalHours).toBe(9);
     expect(batch.seatsLeft).toBe(4); // 15 - 11, from real bookings
+    // v3 · B1 — the batch card carries its own price (here via the fallback).
+    expect(batch.pricePerMonth).toBe(3200);
+    expect(batch.sessionsPerMonth).toBe(8);
+    expect(batch.perSession).toBe(400);
     expect(b.incomplete).toBe(false);
+  });
+
+  it('a batch with its OWN price/sessions overrides the service fallback (v3 · B1)', () => {
+    const r = base();
+    r.batches = [{
+      ...r.batches[0], price: 6500, price_type: 'per_month', sessions_per_month: 8,
+      class_type: 'group', schedule_type: 'fixed',
+    }];
+    const batch = assembleBloom(r).batches[0];
+    expect(batch.pricePerMonth).toBe(6500);
+    expect(batch.perSession).toBe(813); // 6500 / 8, rounded
+  });
+
+  it('a teacher-scheduled solo batch renders with no days/time (v3 · A3)', () => {
+    const r = base();
+    r.batches = [{
+      age_min: 5, age_max: null, open_above: 5, price: 9000, price_type: 'per_month',
+      sessions_per_month: 8, class_type: 'solo', schedule_type: 'teacher_scheduled',
+      days: [], start_time: null, end_time: null, start_date: '2026-08-06',
+    }];
+    const out = assembleBloom(r);
+    expect(out.batches).toHaveLength(1);
+    const batch = out.batches[0];
+    expect(batch.scheduleType).toBe('teacher_scheduled');
+    expect(batch.classType).toBe('solo');
+    expect(batch.pricePerMonth).toBe(9000);
   });
 
   it('derives a service-level ageLabel; span > 8 years collapses to "Ages X+"', () => {

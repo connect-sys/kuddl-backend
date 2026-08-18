@@ -21,11 +21,7 @@ const CANCELLATION_SENTENCE = {
   strict_7d: 'Free cancellation until 7 days before.',
 };
 
-const MAKEUP_SENTENCE = {
-  offered: 'Makeup sessions offered.',
-  not_offered: 'No makeup sessions.',
-  teacher_discretion: "Makeup sessions at teacher's discretion.",
-};
+// Makeup policy removed entirely — Build Spec v3 · C2.
 
 const MIN_REVIEWS_TO_SHOW_RATING = 3;
 
@@ -71,9 +67,18 @@ function legacyPlanFromBatch(b) {
   return null;
 }
 
-/** Assemble one batch with derived duration / session-count / total-hours / seats-left. */
-function shapeBatch(b, holidays = []) {
-  const ageBand = v.formatAgeBand({ ageMin: b.age_min, ageMax: b.age_max, openAbove: b.open_above });
+/**
+ * Assemble one batch (Build Spec v3 · B1) — the batch CARRIES ITS OWN PRICE.
+ * Each card shows: age · schedule · price/month · sessions · per-session (auto)
+ * · seats. `fallback` supplies a service-level (sessions, price) pair for older
+ * batches whose per-batch columns are null. Per-session is derived, never typed.
+ */
+function shapeBatch(b, holidays = [], fallback = {}) {
+  let ageBand = v.formatAgeBand({ ageMin: b.age_min, ageMax: b.age_max, openAbove: b.open_above });
+  // A band wider than 8 years is unrenderable (C5) → collapse to "Ages X+".
+  const aLo = Number(b.age_min);
+  const aHi = Number(b.age_max);
+  if (Number.isFinite(aLo) && Number.isFinite(aHi) && aHi - aLo > 8) ageBand = `Ages ${aLo}+`;
   const durationMinutes = v.deriveSessionDurationMinutes(b.start_time, b.end_time);
   const days = Array.isArray(b.days) ? b.days : (typeof b.days === 'string' && b.days ? JSON.parse(b.days) : []);
   const sessionCount = v.deriveSessionCount({
@@ -81,9 +86,36 @@ function shapeBatch(b, holidays = []) {
     skipDates: b.skip_dates || [], holidays,
   });
   const totalHours = v.deriveTotalHours({ sessionCount, sessionDurationMinutes: durationMinutes });
-  const seatsLeft = v.deriveSeatsLeft(b.seats, b.booked_count);
+  const scheduleType = b.schedule_type === 'teacher_scheduled' ? 'teacher_scheduled' : 'fixed';
+  const classType = b.class_type === 'solo' ? 'solo' : 'group';
+
+  // Per-batch price + frequency. v3 batches store price_per_month directly.
+  // Legacy batches may store a per_session price → convert to a monthly figure
+  // so the card still shows a real "/month". Fall back to the service-level
+  // plan, then to days-derived frequency.
+  const rawPrice = money(b.price);
+  let sessionsPerMonth = Number(b.sessions_per_month);
+  if (!Number.isFinite(sessionsPerMonth) || sessionsPerMonth <= 0) {
+    sessionsPerMonth = Number(fallback.sessionsPerMonth) || v.deriveSessionsPerMonth(days) || null;
+  }
+  let pricePerMonth = null;
+  let perSession = null;
+  if (rawPrice != null && rawPrice > 0 && b.price_type === 'per_session') {
+    perSession = Math.round(rawPrice);
+    pricePerMonth = sessionsPerMonth ? Math.round(rawPrice * sessionsPerMonth) : null;
+  } else {
+    pricePerMonth = rawPrice != null && rawPrice > 0 ? rawPrice : (fallback.pricePerMonth ?? null);
+    perSession = pricePerMonth != null && sessionsPerMonth
+      ? v.derivePerSessionPrice({ pricePerMonth, sessionsPerMonth })
+      : null;
+  }
+  // Solo shows one seat; otherwise seats-left comes from real bookings.
+  const seatsLeft = classType === 'solo' ? null : v.deriveSeatsLeft(b.seats, b.booked_count);
+
   return {
     ageBand,
+    classType,
+    scheduleType,
     timeOfDay: b.time_of_day || null,
     days,
     startTime: b.start_time || null,
@@ -93,6 +125,10 @@ function shapeBatch(b, holidays = []) {
     durationMinutes,
     sessionCount,
     totalHours,
+    // The batch's own price — the single source of truth for its card (B1).
+    pricePerMonth,
+    sessionsPerMonth: sessionsPerMonth || null,
+    perSession,
     // Only present when the partner set real seats → typed scarcity is dead.
     seatsLeft: seatsLeft == null ? undefined : seatsLeft,
     mode: b.mode || null,
@@ -112,36 +148,59 @@ export function assembleBloom(raw = {}) {
 
   const trialPrice = raw.trial && raw.trial.offered ? money(raw.trial.price) : null;
   const trial = raw.trial && raw.trial.offered
-    ? { isFree: trialPrice === 0, price: trialPrice }
+    ? {
+        isFree: trialPrice === 0,
+        price: trialPrice,
+        // v3 · A4/B3: description renders word-for-word in the trial lane;
+        // slotRule drives which batch slots a parent can pick for the trial.
+        description: raw.trial.description || null,
+        slotRule: raw.trial.slot_rule || 'any_open_slot',
+        days: Array.isArray(raw.trial.days) ? raw.trial.days : [],
+      }
     : null;
 
+  // Legacy service-level plan — kept ONLY as the per-batch fallback for older
+  // rows whose batch price/sessions columns are null (Build Spec v3 · C1 moves
+  // the customer render to per-batch price; there are no floating price cards).
   let monthlyPlans = (raw.monthly_plans || []).map(shapeMonthlyPlan).filter(Boolean);
-  // No structured pricing on file → fall back to each real batch's own price.
   if (monthlyPlans.length === 0) {
     monthlyPlans = (raw.batches || []).map(legacyPlanFromBatch).filter(Boolean);
   }
-  // A batch qualifies with a real recurring pattern (days + start/end time)
-  // even when it has no sessionCount — that only exists when both start_date
-  // and end_date are set, which most pre-Batch-Architecture listings never
-  // had (the batch has run on the same weekly pattern since whenever it was
-  // created; there's no real "start date" to report, so none is shown —
-  // never invented). sessionCount is still shown whenever it IS derivable.
+  const fallback = monthlyPlans[0]
+    ? { pricePerMonth: monthlyPlans[0].pricePerMonth, sessionsPerMonth: monthlyPlans[0].sessionsPerMonth }
+    : {};
+
+  // A batch card renders when it has an age band, its own price, and either a
+  // real schedule (days + start/end time), a derivable sessionCount, OR is a
+  // teacher-scheduled solo batch (no fixed days/time — "Timing agreed after
+  // booking"). Each card carries its own price — no separate price list (B1).
   const batches = (raw.batches || [])
-    .map((b) => shapeBatch(b, raw.holidays || []))
-    .filter((b) => b.ageBand && (b.sessionCount || (b.days.length > 0 && b.startTime && b.endTime)));
+    .map((b) => shapeBatch(b, raw.holidays || [], fallback))
+    .filter((b) =>
+      b.ageBand &&
+      b.pricePerMonth != null &&
+      (b.scheduleType === 'teacher_scheduled' ||
+        b.sessionCount ||
+        (b.days.length > 0 && b.startTime && b.endTime)));
 
   const reviewCount = Number(raw.review_count) || 0;
   const rating = reviewCount >= MIN_REVIEWS_TO_SHOW_RATING && Number.isFinite(Number(raw.rating))
     ? Number(raw.rating)
     : null; // never a fake 4.5
 
-  const perSessionValues = monthlyPlans.map((p) => p.perSession).filter((n) => n != null);
+  // "From ₹X/session" = the lowest per-session among LIVE batches (B6).
+  const perSessionValues = batches.map((b) => b.perSession).filter((n) => n != null);
   const fromPerSession = perSessionValues.length ? Math.min(...perSessionValues) : null;
 
-  // Locality name only — NEVER a pincode (Customer Spec §01 r7).
-  const locality = s.mode === 'online' || s.mode === 'ONLINE'
+  // Area-level address for offline ("Sector 50, Noida"), the word "Online" for
+  // online — NEVER a pincode, never a map pin at card level (Build Spec v3 · C11
+  // / Customer Spec §01 r7). All live batches online → the service is online.
+  const rawBatchesForMode = raw.batches || [];
+  const allOnline = rawBatchesForMode.length > 0 && rawBatchesForMode.every((b) => String(b.mode).toLowerCase() === 'online');
+  const isOnline = s.mode === 'online' || s.mode === 'ONLINE' || allOnline;
+  const locality = isOnline
     ? 'Online'
-    : (provider.city || provider.area || s.locality || null);
+    : ([provider.area, provider.city].filter(Boolean).join(', ') || provider.city || provider.area || s.locality || null);
 
   // Service-level age label for the listing card / pills — derived from real
   // batch ages only. §01 r6: a span wider than 8 years auto-collapses to
@@ -163,9 +222,21 @@ export function assembleBloom(raw = {}) {
     }
   }
 
+  // v3 · C1 — the About section = the three description boxes (what/who/why),
+  // stored combined in `description`, double-newline separated. Empty boxes
+  // print nothing (never a blank heading).
+  const about = String(s.description || '')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
   const shaped = {
     id: s.id,
     title: s.name || null,
+    about,
+    // v3 · C16 — prerequisites/inclusions shown before payment.
+    whatToBring: raw.what_to_bring || null,
+    included: raw.whats_included || null,
     byLine: provider.business_name ? `by ${provider.business_name}` : null,
     locality,
     latitude: provider.latitude ?? null,
@@ -176,23 +247,24 @@ export function assembleBloom(raw = {}) {
     primaryImage: s.primary_image_url || null,
     gallery: Array.isArray(s.gallery_images) ? s.gallery_images : [],
     subcategory: s.subcategory_label || s.subcategory || null,
+    subcategoryId: s.subcategory_id || null,
     languages: typeof s.languages === 'string' ? s.languages.split(',').map((x) => x.trim()).filter(Boolean) : (s.languages || []),
     trial,
     monthlyPlans,
     fromPerSession,
     registrationFee: money(raw.registration_fee),
-    makeupSentence: MAKEUP_SENTENCE[raw.makeup_policy] || null,
+    // Makeup removed (C2). Kuddl Curated badge removed (C12) — vetting is a
+    // discreet line the customer page renders below About, not a badge.
     batches,
     cancellationSentence: CANCELLATION_SENTENCE[provider.cancellation_policy] || null,
-    badge: 'Kuddl Curated',
     isNew: v.isNewListing(s.created_at, raw.now),
     rating,
     reviewCount,
   };
 
-  // A Bloom listing needs a name, at least one monthly plan and one batch to
-  // render truthfully. Otherwise flag it — never show blanks/guesses.
-  shaped.incomplete = !(shaped.title && monthlyPlans.length > 0 && batches.length > 0);
+  // A Bloom listing renders when it has a name and at least one priced batch
+  // (each batch carries its own price now). Otherwise flag it — never blanks.
+  shaped.incomplete = !(shaped.title && batches.length > 0);
   return shaped;
 }
 

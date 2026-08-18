@@ -20,12 +20,29 @@ function parseJson(val, fallback) {
 }
 
 /**
+ * id → display name from the canonical `subcategories` table (Build Spec v3 ·
+ * C3). One vocabulary: the same table feeds the customer filter chips, so a
+ * service's label always equals its filter chip. Returns {} on any failure.
+ */
+async function loadSubcategoryNames(env, ids = []) {
+  const uniq = [...new Set((ids || []).filter(Boolean))];
+  if (!uniq.length) return {};
+  const res = await env.KUDDL_DB
+    .prepare(`SELECT id, name FROM subcategories WHERE id IN (${uniq.map(() => '?').join(',')})`)
+    .bind(...uniq).all().catch(() => ({ results: [] }));
+  const map = {};
+  for (const r of res.results || []) map[r.id] = r.name;
+  return map;
+}
+
+/**
  * Pure mapper: raw DB rows → assembleBloom() input. Kept separate so it can
  * be unit-tested without the worker/DB. Bloom batches live in the shared
  * `batches` table; their time/days/dates live inside the `schedule` JSON.
  */
 export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows = [], holidays = []) {
   const bp = parseJson(serviceRow.bloom_pricing, {}) || {};
+  const feat = parseJson(serviceRow.features, {}) || {};
   const batches = (batchRows || []).map((b) => {
     const sched = parseJson(b.schedule, {}) || {};
     return {
@@ -50,6 +67,12 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       // service has no structured monthly_plans.
       price: b.price,
       price_type: b.price_type,
+      // Bloom v3 · Part A: price + frequency + class type live on the batch.
+      // sessions may be null on older rows → assembleBloom falls back to the
+      // service-level sessions_per_month. Per-session is derived, never stored.
+      sessions_per_month: b.sessions_per_month ?? null,
+      class_type: b.class_type || 'group',
+      schedule_type: b.schedule_type || (b.class_type === 'solo' ? 'fixed' : 'fixed'),
     };
   });
   return {
@@ -59,10 +82,17 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       mode: serviceRow.mode || (batchRows[0] && batchRows[0].mode),
       subcategory_label: serviceRow.subcategory_label,
       languages: serviceRow.languages,
-      primary_image_url: serviceRow.primary_image_url,
+      // C10 — a curated/designer thumbnail (features.curated_thumbnail_url, set
+      // by admin) OVERRIDES the default AI cover per service, on card + detail.
+      primary_image_url: feat.curated_thumbnail_url || serviceRow.primary_image_url,
       gallery_images: parseJson(serviceRow.image_urls, []),
       locality: serviceRow.city,
       created_at: serviceRow.created_at,
+      // v3 · C1 — the 3 description boxes (what/who/why) are stored combined
+      // in `description`, double-newline separated; assembleBloom splits them.
+      description: serviceRow.description || null,
+      // v3 · C3 — canonical sub-category id + resolved label.
+      subcategory_id: serviceRow.subcategory_id || null,
     },
     provider: {
       business_name: providerRow.business_name,
@@ -79,7 +109,9 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
     trial: bp.trial || null,
     monthly_plans: bp.monthly_plans || [],
     registration_fee: bp.registration_fee,
-    makeup_policy: bp.makeup_policy,
+    // v3 · C16 — prerequisites/inclusions render before payment.
+    what_to_bring: feat.what_to_bring || bp.what_to_bring || null,
+    whats_included: feat.whats_included || feat.included || bp.whats_included || null,
     batches,
     review_count: providerRow.total_reviews || serviceRow.review_count || 0,
     rating: providerRow.average_rating,
@@ -130,8 +162,14 @@ export async function getBloomServiceList(request, env) {
       for (const b of bRes.results || []) (batchesByService[b.parent_id] ||= []).push(b);
     }
 
+    // Canonical sub-category label from the `subcategories` table — one shared
+    // vocabulary matched by stored id (Build Spec v3 · C3), so a service's chip
+    // label always equals the filter chip label.
+    const subcatNameById = await loadSubcategoryNames(env, services.map((s) => s.subcategory_id));
+
     const cards = services
       .map((s) => {
+        if (s.subcategory_id && subcatNameById[s.subcategory_id]) s.subcategory_label = subcatNameById[s.subcategory_id];
         const raw = mapRowsToBloomRaw(s, providersById[s.provider_id] || {}, batchesByService[s.id] || []);
         return assembleBloom(raw);
       })
@@ -164,6 +202,12 @@ export async function getBloomServiceDetail(request, env) {
     const batchesRes = await env.KUDDL_DB
       .prepare("SELECT * FROM batches WHERE parent_type = 'service' AND parent_id = ? AND status != 'archived'")
       .bind(id).all().catch(() => ({ results: [] }));
+
+    // Canonical sub-category label (C3).
+    if (service.subcategory_id) {
+      const names = await loadSubcategoryNames(env, [service.subcategory_id]);
+      if (names[service.subcategory_id]) service.subcategory_label = names[service.subcategory_id];
+    }
 
     const raw = mapRowsToBloomRaw(service, provider, batchesRes.results || []);
     const shaped = assembleBloom(raw);

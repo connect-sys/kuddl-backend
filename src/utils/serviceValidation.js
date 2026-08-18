@@ -41,6 +41,10 @@ export const BANNED_WORDS = [
 const PHONE_RE = /(?:\+?\d[\s-]?){7,}/; // 7+ digits w/ optional separators = a phone number
 const URL_RE = /(https?:\/\/|www\.|\b[a-z0-9-]+\.(com|in|co|org|net|io)\b)/i;
 const PERCENT_100_RE = /\b100\s?%/;
+// Superlative + location, e.g. "Best music class in Noida", "No.1 … in Delhi".
+// Catches the C7 example that a bare "best in noida" substring would miss.
+const SUPERLATIVE_LOCATION_RE =
+  /\b(best|no\.?\s*1|#\s*1|number\s*one|top[-\s]?rated|world[-\s]?class|leading|finest|greatest)\b[^.]*\bin\s+[a-z]/i;
 
 /** Returns an array of banned tokens found in `text` (empty = clean). */
 export function findBannedWords(text) {
@@ -50,6 +54,7 @@ export function findBannedWords(text) {
     if (t.includes(w)) hits.push(w.trim());
   }
   if (PERCENT_100_RE.test(t)) hits.push('100%');
+  if (SUPERLATIVE_LOCATION_RE.test(t)) hits.push('superlative location claim');
   if (PHONE_RE.test(t)) hits.push('phone number');
   if (URL_RE.test(t)) hits.push('link');
   return [...new Set(hits)];
@@ -230,20 +235,23 @@ export function validateVariants(variants) {
 }
 
 /**
- * Server-side publishing gate for a Bloom service (Screen C/D):
- * trial answered + ≥1 complete monthly plan + makeup policy + ≥1 batch.
+ * Server-side publishing gate for a Bloom service (Build Spec v3 · A6):
+ * trial answered + ≥1 complete PRICED batch. The service-level Monthly Plan
+ * and Makeup policy are gone — price lives on each batch (C2).
  * Returns { canPublish, missing[] }.
  */
 export function bloomPublishGate(service = {}) {
   const missing = [];
   if (service.trial_offered == null) missing.push('trial question');
-  const plans = service.monthly_plans || [];
-  const hasPlan = plans.some((p) => Number(p.sessions_per_month) > 0 && Number(p.price_per_month) > 0);
-  if (!hasPlan) missing.push('one complete monthly plan');
-  if (!service.makeup_policy) missing.push('makeup policy');
   const batches = service.batches || [];
-  const hasBatch = batches.some((b) => b.age_min != null && b.days && b.start_time && b.end_time && b.start_date);
-  if (!hasBatch) missing.push('at least one complete batch');
+  // A complete batch has an age, its own price, a start date, and either a
+  // fixed schedule (days + times) or is teacher-scheduled (solo).
+  const hasBatch = batches.some((b) =>
+    b.age_min != null &&
+    Number(b.price_per_month) > 0 &&
+    b.start_date &&
+    (b.schedule_type === 'teacher_scheduled' || (b.days && b.start_time && b.end_time)));
+  if (!hasBatch) missing.push('at least one complete priced batch');
   return { canPublish: missing.length === 0, missing };
 }
 

@@ -42,6 +42,14 @@ function normalizeBatch(row) {
       }
     }
   }
+  // Bloom v3 · Part A: price lives on the batch. Per-session is DERIVED
+  // (price_per_month ÷ sessions_per_month), never stored (A5). Older batches
+  // stored frequency at the service level, so sessions_per_month may be null —
+  // callers fall back to the service value when rendering.
+  const price = Number(out.price);
+  const sessions = Number(out.sessions_per_month);
+  out.price_per_session =
+    price > 0 && sessions > 0 ? Math.round(price / sessions) : null;
   return out;
 }
 
@@ -53,14 +61,21 @@ function normalizeBatch(row) {
 export async function insertBatch(env, data) {
   const id = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
+  // Bloom v3 · Part A: class_type (group|solo), sessions_per_month and
+  // schedule_type (fixed|teacher_scheduled) are first-class batch columns.
+  // Solo forces one seat; teacher-scheduled batches carry no fixed days/time.
+  const classType = data.class_type === 'solo' ? 'solo' : 'group';
+  const scheduleType = data.schedule_type === 'teacher_scheduled' ? 'teacher_scheduled' : 'fixed';
+  const totalSeats = classType === 'solo' ? 1 : (data.total_seats ?? null);
   await env.KUDDL_DB.prepare(
     `INSERT INTO batches (
       id, parent_type, parent_id, provider_id, batch_name, mode,
       age_min, age_max, pincodes, total_seats, per_session_override,
       cancellation_policy, booking_cutoff_hours, instructor, what_to_bring,
       price, price_type, schedule, features, status, booked_seats,
+      class_type, sessions_per_month, schedule_type,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   )
     .bind(
       id,
@@ -72,7 +87,7 @@ export async function insertBatch(env, data) {
       data.age_min ?? null,
       data.age_max ?? null,
       JSON.stringify(data.pincodes || []),
-      data.total_seats ?? null,
+      totalSeats,
       data.per_session_override ?? null,
       data.cancellation_policy || 'flexible',
       data.booking_cutoff_hours ?? 24,
@@ -84,6 +99,9 @@ export async function insertBatch(env, data) {
       JSON.stringify(data.features || {}),
       data.status || 'live',
       data.booked_seats ?? 0,
+      classType,
+      data.sessions_per_month ?? null,
+      scheduleType,
       now,
       now
     )
@@ -215,6 +233,8 @@ export async function updateBatch(request, env) {
       'per_session_override', 'cancellation_policy', 'booking_cutoff_hours',
       'instructor', 'what_to_bring', 'price', 'price_type', 'schedule',
       'features', 'status',
+      // Bloom v3 · Part A
+      'class_type', 'sessions_per_month', 'schedule_type',
     ];
     const sets = [];
     const vals = [];
