@@ -99,7 +99,11 @@ export function formatAgeBand({ ageMin, ageMax, openAbove } = {}) {
   if (openAbove != null && (ageMax == null || ageMax === '')) return `Ages ${Number(openAbove)}+`;
   const min = Number(ageMin);
   const max = Number(ageMax);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  if (!Number.isFinite(min)) return null;
+  // An absent / zero / below-min upper bound means "open-ended" (e.g. a partner
+  // enters min 5 and leaves max blank → stored as 0). Render "Ages 5+", never
+  // the broken "Ages 5–0".
+  if (!Number.isFinite(max) || max <= 0 || max < min) return `Ages ${min}+`;
   return `Ages ${min}–${max}`;
 }
 

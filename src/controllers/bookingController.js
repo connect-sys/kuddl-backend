@@ -310,8 +310,15 @@ export async function createBooking(request, env) {
         }));
     }
 
-    // Calculate platform fee (5%)
-    const baseAmount = totalAmount || service.price; // Trust frontend calculation or recalculate based on duration * price if hourly
+    // Calculate platform fee (5%).
+    // Respect an explicit amount of 0 — a FREE trial sends totalAmount=0, and the
+    // old `totalAmount || service.price` wrongly treated 0 as "missing" and
+    // substituted the enrolment price (₹500), so free trials showed
+    // "Total paid ₹500". Only fall back to the service price when NO amount was
+    // sent at all; a trial with no amount is free. (N2)
+    const isTrial = bookingType === 'trial';
+    const hasAmount = totalAmount !== undefined && totalAmount !== null && totalAmount !== '';
+    const baseAmount = hasAmount ? Number(totalAmount) : (isTrial ? 0 : (Number(service.price) || 0));
     const platformFee = baseAmount * 0.05;
     const providerAmount = baseAmount - platformFee;
 
@@ -578,8 +585,11 @@ export async function getBookingConfirmedView(request, env) {
 
     // Price lines — the service total (registration fee / add-ons would each be
     // their own line once line_items ship). Total is always a number (§06).
+    // A trial is labelled "Free trial" and carries its real (usually ₹0) amount,
+    // never the enrolment price. (N2)
+    const isTrialBooking = details.bookingType === 'trial';
     const total = Number(booking.total_amount) || 0;
-    const priceLines = [{ label: service.name || 'Booking', amount: total }];
+    const priceLines = [{ label: isTrialBooking ? 'Free trial' : (service.name || 'Booking'), amount: total }];
 
     // Refund shown before the cancel tap (§01 r9 / §06). Full refund while the
     // policy window is open; a real refund engine will make this exact later.
