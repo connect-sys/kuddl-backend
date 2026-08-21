@@ -463,13 +463,19 @@ export async function updateParentProfile(request, env) {
     if (updateData.gender) parentUpdates.gender = updateData.gender;
     if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
     if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
-    if (updateData.gender) parentUpdates.gender = updateData.gender;
-    if (updateData.date_of_birth) parentUpdates.date_of_birth = updateData.date_of_birth;
-    if (updateData.profile_picture) parentUpdates.profile_picture = updateData.profile_picture;
     // Skip phone update to avoid UNIQUE constraint conflicts
     if (updateData.address) parentUpdates.address = updateData.address;
-    if (updateData.alternate_contact_name || updateData.alternateContactName) parentUpdates.alternate_contact_name = updateData.alternate_contact_name || updateData.alternateContactName;
-    if (updateData.alternate_contact_phone || updateData.alternateContactPhone) parentUpdates.alternate_contact_phone = updateData.alternate_contact_phone || updateData.alternateContactPhone;
+    // The parents table has a SINGLE `alternate_contact` column. Writing to
+    // `alternate_contact_name`/`alternate_contact_phone` (which don't exist)
+    // made the whole UPDATE throw "no such column", so NOTHING saved whenever an
+    // emergency contact was filled — including the name, email and profile
+    // picture. Fold the emergency contact into the real column instead.
+    const altContact =
+      updateData.alternate_contact ||
+      [updateData.alternate_contact_name || updateData.alternateContactName,
+       updateData.alternate_contact_phone || updateData.alternateContactPhone]
+        .filter(Boolean).join(' · ');
+    if (altContact) parentUpdates.alternate_contact = altContact;
 
     console.log('🔍 Parent updates to apply:', parentUpdates);
     
