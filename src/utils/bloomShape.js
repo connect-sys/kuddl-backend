@@ -116,7 +116,9 @@ function shapeBatch(b, holidays = [], fallback = {}) {
     ageBand,
     classType,
     scheduleType,
-    timeOfDay: b.time_of_day || null,
+    // Derive from the start time so a stale stored value never shows the wrong
+    // band; fall back to the stored value only when there's no start time.
+    timeOfDay: v.deriveTimeOfDay(b.start_time) || b.time_of_day || null,
     days,
     startTime: b.start_time || null,
     endTime: b.end_time || null,

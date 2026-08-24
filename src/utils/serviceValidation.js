@@ -108,6 +108,22 @@ export function formatAgeBand({ ageMin, ageMax, openAbove } = {}) {
 }
 
 /**
+ * Derive the time-of-day band from a "HH:MM" (24h) start time. Single agreed
+ * standard, mirrored on the partner side: <12:00 morning · 12:00–16:59
+ * afternoon · ≥17:00 evening. Used to render the band from the start time so a
+ * stale stored `time_of_day` can never show the wrong label (e.g. 08:30 must
+ * read "Morning", never "Afternoon").
+ */
+export function deriveTimeOfDay(start) {
+  if (!start || typeof start !== 'string') return null;
+  const h = Number(start.split(':')[0]);
+  if (!Number.isFinite(h)) return null;
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
+}
+
+/**
  * "New to Kuddl" — a listing gets the badge for its first 21 days (Customer
  * Spec §01 r10). Pure: pass `now` for deterministic tests.
  */
@@ -271,6 +287,7 @@ export default {
   validateServiceName,
   validateAgeBand,
   formatAgeBand,
+  deriveTimeOfDay,
   isNewListing,
   derivePerSessionPrice,
   deriveSessionDurationMinutes,

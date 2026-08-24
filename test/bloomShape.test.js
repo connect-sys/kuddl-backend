@@ -23,6 +23,25 @@ const base = () => ({
   rating: 4.5,
 });
 
+describe('time-of-day band is derived from the start time (client Open Issue #1)', () => {
+  it("labels a morning start 'morning' even when the stored value is stale/wrong", () => {
+    const raw = base();
+    // 08:30 start but a wrong stored band — the derived value must win.
+    raw.batches[0].start_time = '08:30';
+    raw.batches[0].end_time = '10:30';
+    raw.batches[0].time_of_day = 'afternoon';
+    const batch = assembleBloom(raw).batches[0];
+    expect(batch.timeOfDay).toBe('morning');
+  });
+  it('maps the band cut-offs consistently (<12 morning · 12–16:59 afternoon · ≥17 evening)', () => {
+    const at = (t) => { const r = base(); r.batches[0].start_time = t; return assembleBloom(r).batches[0].timeOfDay; };
+    expect(at('11:59')).toBe('morning');
+    expect(at('12:00')).toBe('afternoon');
+    expect(at('16:59')).toBe('afternoon');
+    expect(at('17:00')).toBe('evening');
+  });
+});
+
 describe('assembleBloom — real values only', () => {
   it('derives per-session, schedule, seats-left; batch carries its own price; no makeup/badge (v3)', () => {
     const b = assembleBloom(base());
