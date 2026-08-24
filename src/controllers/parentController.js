@@ -1236,17 +1236,30 @@ export async function uploadParentProfilePicture(request, env) {
     }
 
     const parentId = decoded.payload.id;
-    const phone = decoded.payload.phone;
+    let phone = decoded.payload.phone;
 
-    // Get parent from database
+    // Resolve the SAME parent row that getParentProfile / updateParentProfile use.
+    // Otherwise the picture is written to a different row than the profile GET
+    // reads back, and it "vanishes" on reload. Google-signup accounts store a
+    // `g:<googleId>` placeholder in `phone` whose digits are meaningless — never
+    // derive a phone match from it; fall through to the authoritative token id.
+    if (phone && String(phone).startsWith('g:')) phone = null;
     const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
     const phone10 = phoneDigits.length > 10 ? phoneDigits.slice(-10) : phoneDigits;
-    
-    const parent = await env.KUDDL_DB.prepare(`
-      SELECT id FROM parents 
-      WHERE phone LIKE ? OR phone LIKE ? OR phone = ? OR id = ?
-      LIMIT 1
-    `).bind(`%${phone10}`, phone10, phone || '', parentId).first();
+
+    let parent = null;
+    if (phone10 && phone10.length >= 10) {
+      parent = await env.KUDDL_DB.prepare(`
+        SELECT id FROM parents
+        WHERE phone LIKE ? OR phone LIKE ? OR phone = ?
+        ORDER BY created_at ASC LIMIT 1
+      `).bind(`%${phone10}`, phone10, phone || '').first();
+    }
+    if (!parent && parentId) {
+      parent = await env.KUDDL_DB.prepare(`
+        SELECT id FROM parents WHERE id = ? LIMIT 1
+      `).bind(parentId).first();
+    }
 
     if (!parent) {
       return addCorsHeaders(new Response(JSON.stringify({
