@@ -16,38 +16,59 @@
 #   wrangler secret list --env production
 # ─────────────────────────────────────────────────────────────────────────────
 
-name = "kuddl-backend-dev"
+# ─────────────────────────────────────────────────────────────────────────────
+# DEFAULT ENVIRONMENT = PRODUCTION  (deliberate — do NOT change back to dev)
+# ─────────────────────────────────────────────────────────────────────────────
+# A plain `wrangler deploy` (no --env) — which is exactly what the git-connected
+# Cloudflare Workers Build runs on every push — MUST bind kuddl-prod, never
+# kuddl-dev. So the DEFAULT config below IS production. This makes it
+# structurally impossible for a deploy/push to flip api.kuddlkin.co onto the dev
+# database. The worker name matches env.production (kuddl-backend-prod), so the
+# prod secrets set via `wrangler secret put --env production` stay attached.
+#
+# Deploy DEV explicitly:  wrangler deploy --env development   (npm run deploy:dev)
+# ─────────────────────────────────────────────────────────────────────────────
+name = "kuddl-backend-prod"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 account_id = "6a9b1e7bdc83a9d8ec1b28d86ac09d0b"
+workers_dev = false
+
+routes = [
+  { pattern = "api.kuddlkin.co", custom_domain = true }
+]
 
 # Development server configuration
 [dev]
 port = 8787
 
-# Default (development) non-secret variables.
+# 2am = daily settlement payout; hourly = Care confirm-window timeout sweep (§07.1).
+[triggers]
+crons = ["0 2 * * *", "0 * * * *"]
+
+# Default (PRODUCTION) non-secret variables.
 # Secrets (JWT_SECRET, TWILIO_*, RAZORPAY_*, SANDBOX_*, SENDGRID_*) are set via
-# `wrangler secret put` and are NOT listed here.
+# `wrangler secret put --env production` on the kuddl-backend-prod worker.
 [vars]
-ENVIRONMENT = "development"
-TWILIO_TEST_MODE = "true"
-R2_PUBLIC_URL = "https://devassets.kuddlkin.co"
-SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"
+ENVIRONMENT = "production"
+TWILIO_TEST_MODE = "false"
+R2_PUBLIC_URL = "https://prodassets.kuddlkin.co"
+SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
-SANDBOX_API_TEST_MODE = "true"
+SANDBOX_API_TEST_MODE = "false"
 FRONTEND_URL = "https://partner.kuddlkin.co"
 
-# Default D1 Database Bindings (Development)
+# Default D1 Database Binding = PRODUCTION (kuddl-prod). NEVER kuddl-dev here.
 [[d1_databases]]
 binding = "KUDDL_DB"
-database_name = "kuddl-dev"
-database_id = "710b0b90-1803-490e-990a-97c1893edd67"
+database_name = "kuddl-prod"
+database_id = "27348837-2b95-4583-8c27-325bf0a1652c"
 
-# Default R2 Storage Bindings (Development)
+# Default R2 Storage Binding = PRODUCTION.
 [[r2_buckets]]
 binding = "KUDDL_STORAGE"
-bucket_name = "kuddl-storage-dev"
+bucket_name = "kuddl-storage-prod"
 
 # ─── Development environment ───────────────────────────────────────────────
 [env.development]
