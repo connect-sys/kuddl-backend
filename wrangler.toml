@@ -56,7 +56,7 @@ TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://prodassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
-SANDBOX_API_TEST_MODE = "false"
+SANDBOX_API_TEST_MODE = "true"
 FRONTEND_URL = "https://partner.kuddlkin.co"
 
 # Default D1 Database Binding = PRODUCTION (kuddl-prod). NEVER kuddl-dev here.
@@ -121,7 +121,7 @@ TWILIO_TEST_MODE = "false"
 R2_PUBLIC_URL = "https://prodassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@kuddl.co"
 SANDBOX_BASE_URL = "https://api.sandbox.co.in"
-SANDBOX_API_TEST_MODE = "false"
+SANDBOX_API_TEST_MODE = "true"
 FRONTEND_URL = "https://partner.kuddlkin.co"
 
 [[env.production.d1_databases]]
