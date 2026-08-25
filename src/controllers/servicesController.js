@@ -2011,49 +2011,9 @@ export async function updateService(request, env) {
       `UPDATE services SET ${updates.join(', ')} WHERE id = ?`
     ).bind(...values).run();
 
-    // Re-sync batches from the wizard's features.schedules so edits to batches
-    // (add / change / remove) actually reach the customer read path (which reads
-    // the batches table). Archive the current live batches — existing bookings
-    // keep their (now archived) batch row — then recreate one per schedule.
-    try {
-      const feats = updateData.features && typeof updateData.features === 'object'
-        ? updateData.features
-        : (typeof updateData.features === 'string' ? JSON.parse(updateData.features) : null);
-      if (feats && Array.isArray(feats.schedules) && feats.schedules.length) {
-        await env.KUDDL_DB.prepare(
-          "UPDATE batches SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE parent_type = 'service' AND parent_id = ? AND status != 'archived'"
-        ).bind(serviceId).run();
-        const pincodes = Array.isArray(updateData.available_pincodes) ? updateData.available_pincodes : [];
-        const priceNum = parseFloat(updateData.price) || 0;
-        for (const sched of feats.schedules) {
-          const modes = Array.isArray(sched.modes) ? sched.modes : null;
-          const mode = modes ? (modes.length >= 2 ? 'hybrid' : (modes[0] || 'offline')) : (sched.mode || feats.mode || 'offline');
-          await insertBatch(env, {
-            parent_type: 'service',
-            parent_id: serviceId,
-            provider_id: service.provider_id,
-            batch_name: sched.name || feats.variant_name || updateData.name || 'Batch',
-            mode,
-            age_min: sched.age_min ?? feats.age_min ?? null,
-            age_max: sched.age_max ?? feats.age_max ?? null,
-            pincodes,
-            total_seats: sched.capacity_override ?? null,
-            per_session_override: null,
-            cancellation_policy: updateData.cancellation_policy || 'flexible',
-            booking_cutoff_hours: feats.booking_cutoff_hours ?? 24,
-            instructor: sched.instructor || feats.instructor || null,
-            what_to_bring: feats.what_to_bring || null,
-            price: priceNum,
-            price_type: updateData.price_type || null,
-            schedule: sched || {},
-            features: feats,
-            status: 'live',
-          });
-        }
-      }
-    } catch (batchSyncErr) {
-      console.error('⚠️ Batch re-sync on update failed:', batchSyncErr?.message);
-    }
+    // NOTE: batch re-sync happens ONCE, below, after `updatedService` is loaded.
+    // (A second, earlier resync used to run here; it inserted rows that the block
+    // below then deleted — dead work that also mis-aligned booked_seats. Removed.)
 
     const updatedService = await env.KUDDL_DB.prepare(
       'SELECT * FROM services WHERE id = ?'
@@ -2111,8 +2071,15 @@ export async function updateService(request, env) {
             booking_cutoff_hours: f.booking_cutoff_hours ?? 24,
             instructor: sched.instructor || f.instructor || null,
             what_to_bring: f.what_to_bring || null,
-            price: parseFloat(svcPrice) || 0,
+            // R2 / Bloom v3 · A1 — price + sessions + class type live on the BATCH.
+            // Persist the batch's OWN values (mirrors createService) so an edited
+            // batch price (e.g. ₹12,000) and its sessions/class type reach the
+            // customer read path, instead of the stale service-level price.
+            price: parseFloat(sched.price_per_month ?? sched.price ?? svcPrice) || 0,
             price_type: svcPriceType || null,
+            sessions_per_month: sched.sessions_per_month ?? f.sessions_per_month ?? null,
+            class_type: sched.class_type === 'solo' ? 'solo' : 'group',
+            schedule_type: sched.schedule_type === 'teacher_scheduled' ? 'teacher_scheduled' : 'fixed',
             schedule: sched || {},
             features: f,
             status: 'live',
