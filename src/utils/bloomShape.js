@@ -234,6 +234,8 @@ export function assembleBloom(raw = {}) {
 
   const shaped = {
     id: s.id,
+    // Needed so the mobile booking flow has the provider to book against.
+    providerId: provider.id || s.provider_id || null,
     title: s.name || null,
     about,
     // v3 · C16 — prerequisites/inclusions shown before payment.

@@ -95,6 +95,7 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       subcategory_id: serviceRow.subcategory_id || null,
     },
     provider: {
+      id: providerRow.id,
       business_name: providerRow.business_name,
       experience_years: providerRow.experience_years,
       city: providerRow.city,
