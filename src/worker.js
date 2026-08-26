@@ -3913,7 +3913,7 @@ router.get('/api/public/services-all', async (request, env) => {
           s.provider_id,
           p.id as provider_db_id,
           p.business_name,
-          p.name,
+          p.name as provider_name,
           p.profile_picture as profile_image_url,
           p.city,
           p.state,
@@ -3967,7 +3967,11 @@ router.get('/api/public/services-all', async (request, env) => {
         
         return {
           id: service.id,
+          // s.name is the SERVICE name; p.name (provider person) is exposed
+          // separately as provider_name so cards can show the business name.
           name: service.name,
+          business_name: service.business_name || '',
+          provider_name: service.provider_name || '',
           description: service.description,
           category_id: service.category_id,
           category_name: service.category_name,
@@ -3988,8 +3992,8 @@ router.get('/api/public/services-all', async (request, env) => {
           profile_image_url: service.profile_image_url,
           provider: {
             id: service.provider_id,
-            businessName: service.business_name || 'Service Provider',
-            name: service.name || 'Service Provider',
+            businessName: service.business_name || '',
+            name: service.provider_name || '',
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
@@ -3997,7 +4001,7 @@ router.get('/api/public/services-all', async (request, env) => {
             state: service.state || 'Nationwide',
             average_rating: 4.5,
             experience_years: service.experience_years || 0,
-            business_name: service.business_name || 'Service Provider'
+            business_name: service.business_name || ''
           },
           createdAt: service.created_at,
           created_at: service.created_at,
