@@ -119,6 +119,15 @@ export function assembleCare(raw = {}) {
     subcategory: s.subcategory_label || s.subcategory || null,
     sessionPrice,
     sessionDurationMinutes,
+    // Partner-entered detail the parent should actually see before booking.
+    concerns: Array.isArray(raw.concerns) ? raw.concerns.filter(Boolean) : [],
+    qualification: (raw.qualification && String(raw.qualification).trim()) || null,
+    format: (raw.format && String(raw.format).trim()) || null,
+    typicalCourse: (raw.typical_course && String(raw.typical_course).trim()) || null,
+    homeVisits: raw.home_visits === true ? true : (raw.home_visits === false ? false : null),
+    homeVisitAreas: (raw.home_visit_areas && String(raw.home_visit_areas).trim()) || null,
+    clinicAddress: (raw.clinic_address && String(raw.clinic_address).trim()) || null,
+    availabilityDays: Array.isArray(raw.availability_days) ? raw.availability_days.filter(Boolean) : [],
     packages,
     // §07.1 — booking is a request that the specialist confirms.
     bookingModel: 'request',
