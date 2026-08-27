@@ -3929,8 +3929,10 @@ router.get('/api/public/services-all', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
-        WHERE s.status = 'active' AND p.is_active = 1
-          AND COALESCE(s.partner_approved, 1) = 1
+        -- Match the web module endpoints: show every ACTIVE service (from a
+        -- non-deactivated provider). The partner_approved gate is intentionally
+        -- NOT applied here so the app lists the same services the website does.
+        WHERE s.status = 'active' AND COALESCE(p.is_active, 1) = 1
       `;
       
       const params = [];
