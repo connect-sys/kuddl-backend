@@ -63,7 +63,10 @@ export async function getPartnerServices(request, env) {
     const partnerId = pathParts[pathParts.indexOf('partners') + 1];
 
     const services = await env.KUDDL_DB.prepare(`
-      SELECT s.*, c.name as category_name
+      SELECT s.*, c.name as category_name,
+        -- Bloom v3 keeps the price on the batches (services.price is 0), so expose
+        -- the cheapest batch price for the card to display.
+        (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price
       FROM services s
       LEFT JOIN categories c ON s.category_id = c.id
       WHERE s.provider_id = ?
