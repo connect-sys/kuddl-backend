@@ -3941,7 +3941,11 @@ router.get('/api/public/services-all', async (request, env) => {
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
             OR s.bloom_pricing IS NOT NULL
-            OR EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id)
+            -- Batches only count for BLOOM services. An Adventure/Care service
+            -- with no structured pricing but a stray batch (e.g. 'Kalaakul') is
+            -- incomplete and must NOT show — matching the website.
+            OR (LOWER(s.category_id) LIKE '%bloom%'
+                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
           )
       `;
       
