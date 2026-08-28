@@ -4554,7 +4554,6 @@ router.get('/api/public/latest', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         WHERE s.status = 'active'
-          AND COALESCE(s.partner_approved, 1) = 1
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL

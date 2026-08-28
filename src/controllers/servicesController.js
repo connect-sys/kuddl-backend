@@ -1062,10 +1062,11 @@ export async function getPublicServices(request, env) {
         LEFT JOIN categories c ON s.category_id = c.id
         LEFT JOIN providers p ON s.provider_id = p.id
         WHERE s.status = 'active'
-          AND COALESCE(s.partner_approved, 1) = 1
-          -- Only "complete" listings (same rule as services-all / the website):
-          -- a service must carry its structured category pricing, or be a Bloom
-          -- service with batches. Hides incomplete drafts like 'Kalaakul'.
+          -- No partner_approved gate — the website's per-module lists don't apply
+          -- one, so neither do we (keeps mobile == web).
+          -- Only "complete" listings: a service must carry its structured category
+          -- pricing, or be a Bloom service with batches. Hides incomplete drafts
+          -- like 'Kalaakul'.
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
