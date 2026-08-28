@@ -4555,6 +4555,13 @@ router.get('/api/public/latest', async (request, env) => {
         LEFT JOIN providers p ON s.provider_id = p.id
         WHERE s.status = 'active'
           AND COALESCE(s.partner_approved, 1) = 1
+          AND (
+            s.adventure_pricing IS NOT NULL
+            OR s.care_pricing IS NOT NULL
+            OR s.bloom_pricing IS NOT NULL
+            OR (LOWER(s.category_id) LIKE '%bloom%'
+                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+          )
         ORDER BY s.created_at DESC LIMIT ?
       `).bind(limit).all(),
       env.KUDDL_DB.prepare(`
