@@ -1073,6 +1073,7 @@ export async function getPublicServices(request, env) {
             OR s.bloom_pricing IS NOT NULL
             OR (LOWER(s.category_id) LIKE '%bloom%'
                 AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+            OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )
       `;
 

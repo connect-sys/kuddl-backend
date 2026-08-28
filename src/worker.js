@@ -3946,6 +3946,9 @@ router.get('/api/public/services-all', async (request, env) => {
             -- incomplete and must NOT show — matching the website.
             OR (LOWER(s.category_id) LIKE '%bloom%'
                 AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+            -- Discover services have no structured pricing blob — a flat price is
+            -- their "complete" signal.
+            OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )
       `;
       
@@ -4560,6 +4563,7 @@ router.get('/api/public/latest', async (request, env) => {
             OR s.bloom_pricing IS NOT NULL
             OR (LOWER(s.category_id) LIKE '%bloom%'
                 AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+            OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )
         ORDER BY s.created_at DESC LIMIT ?
       `).bind(limit).all(),
