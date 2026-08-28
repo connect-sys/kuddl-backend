@@ -1761,13 +1761,15 @@ export async function getAllServicesForAdmin(request, env) {
     }
 
     const services = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         s.*,
         p.name as provider_name,
         p.email as provider_email,
-        p.phone as provider_phone
+        p.phone as provider_phone,
+        c.name as category_name
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
+      LEFT JOIN categories c ON s.category_id = c.id
       ORDER BY s.created_at DESC
     `).all();
 
