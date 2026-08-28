@@ -3929,10 +3929,20 @@ router.get('/api/public/services-all', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
-        -- Match the web module endpoints: show every ACTIVE service (from a
-        -- non-deactivated provider). The partner_approved gate is intentionally
-        -- NOT applied here so the app lists the same services the website does.
-        WHERE s.status = 'active' AND COALESCE(p.is_active, 1) = 1
+        -- Show EXACTLY the services the website shows. The web's per-module
+        -- endpoints (/api/{adventure,bloom,care}/services) list only "complete"
+        -- listings — i.e. those carrying their structured category pricing (or
+        -- Bloom batches). A service that is merely tagged with a category but has
+        -- no pricing (e.g. an Adventure service with no adventure_pricing) is
+        -- flagged incomplete and hidden on web, so we hide it here too. No
+        -- partner_approved / is_active gate — the web applies neither.
+        WHERE s.status = 'active'
+          AND (
+            s.adventure_pricing IS NOT NULL
+            OR s.care_pricing IS NOT NULL
+            OR s.bloom_pricing IS NOT NULL
+            OR EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id)
+          )
       `;
       
       const params = [];
