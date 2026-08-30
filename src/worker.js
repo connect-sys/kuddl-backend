@@ -3921,6 +3921,9 @@ router.get('/api/public/services-all', async (request, env) => {
           p.is_active,
           p.serviceable_pincodes,
           p.pincode as provider_pincode,
+          -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
+          -- the cheapest batch price so the card can show a real price, not 'Free'.
+          (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price,
           CASE
             WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
             WHEN ? != '' AND p.city IN (SELECT city FROM pincodes WHERE pincode = ?) THEN 2
@@ -3998,6 +4001,7 @@ router.get('/api/public/services-all', async (request, env) => {
           subcategory_id: service.subcategory_id,
           price_type: service.price_type,
           price: service.price,
+          min_batch_price: service.min_batch_price ?? null,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : [],
           // Customer-facing extras extracted from features (display-only).
