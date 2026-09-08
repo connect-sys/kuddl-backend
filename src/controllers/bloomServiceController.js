@@ -138,7 +138,7 @@ export async function getBloomServiceList(request, env) {
     // category — assembleBloom() falls back to their real batch pricing so
     // these aren't silently excluded.
     const svcRes = await env.KUDDL_DB
-      .prepare("SELECT * FROM services WHERE status = 'active' AND (bloom_pricing IS NOT NULL OR LOWER(category_id) LIKE '%bloom%') ORDER BY created_at DESC LIMIT 60")
+      .prepare("SELECT * FROM services WHERE status = 'active' AND LOWER(category_id) LIKE '%bloom%' ORDER BY created_at DESC LIMIT 60")
       .all().catch(() => ({ results: [] }));
     const services = svcRes.results || [];
     if (!services.length) return json({ success: true, data: [] });

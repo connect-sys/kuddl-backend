@@ -639,6 +639,20 @@ export async function createService(request, env) {
       }
     }
 
+    // Tags — a JSON array of free-text search tags (item 9). Additive/guarded so
+    // it works with or without the `tags` column being migrated yet.
+    if (serviceData.tags !== undefined) {
+      try {
+        const t = Array.isArray(serviceData.tags)
+          ? serviceData.tags
+          : (typeof serviceData.tags === 'string' ? JSON.parse(serviceData.tags) : []);
+        await env.KUDDL_DB.prepare('UPDATE services SET tags = ? WHERE id = ?')
+          .bind(JSON.stringify(Array.isArray(t) ? t : []), serviceId).run();
+      } catch (e) {
+        console.warn('tags not saved (column missing or bad JSON):', e.message);
+      }
+    }
+
     // Care (specialists) — one JSON blob holding session price + packages +
     // claimed title + registration number + ages. The protected-title gate is
     // applied on READ from the provider's verified state, never from this JSON.
@@ -2026,6 +2040,20 @@ export async function updateService(request, env) {
     await env.KUDDL_DB.prepare(
       `UPDATE services SET ${updates.join(', ')} WHERE id = ?`
     ).bind(...values).run();
+
+    // Tags (item 9) — kept out of the whitelist above and applied separately,
+    // best-effort, so a not-yet-migrated `tags` column can never fail the edit.
+    if (updateData.tags !== undefined) {
+      try {
+        const t = Array.isArray(updateData.tags)
+          ? updateData.tags
+          : (typeof updateData.tags === 'string' ? JSON.parse(updateData.tags) : []);
+        await env.KUDDL_DB.prepare('UPDATE services SET tags = ? WHERE id = ?')
+          .bind(JSON.stringify(Array.isArray(t) ? t : []), serviceId).run();
+      } catch (e) {
+        console.warn('tags not saved (column missing or bad JSON):', e.message);
+      }
+    }
 
     // NOTE: batch re-sync happens ONCE, below, after `updatedService` is loaded.
     // (A second, earlier resync used to run here; it inserted rows that the block

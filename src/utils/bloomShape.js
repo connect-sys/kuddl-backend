@@ -55,9 +55,15 @@ function legacyPlanFromBatch(b) {
   const price = money(b.price);
   if (price == null || price <= 0) return null;
   const days = Array.isArray(b.days) ? b.days : (typeof b.days === 'string' && b.days ? JSON.parse(b.days) : []);
-  const sessionsPerMonth = v.deriveSessionsPerMonth(days);
+  // Prefer the batch's own v3 sessions_per_month; fall back to days-derived.
+  const v3Sessions = Number(b.sessions_per_month);
+  const hasV3Sessions = Number.isFinite(v3Sessions) && v3Sessions > 0;
+  const sessionsPerMonth = hasV3Sessions ? v3Sessions : v.deriveSessionsPerMonth(days);
   if (!sessionsPerMonth) return null;
-  if (b.price_type === 'per_month') {
+  // A v3 batch (own sessions_per_month) or an explicit per_month price → `price`
+  // is the MONTHLY figure; per-session is derived. Only a true legacy
+  // per_session batch (no v3 sessions column) stores one session's price.
+  if (hasV3Sessions || b.price_type === 'per_month') {
     return { sessionsPerMonth, pricePerMonth: price, perSession: v.derivePerSessionPrice({ pricePerMonth: price, sessionsPerMonth }) };
   }
   if (b.price_type === 'per_session') {
@@ -94,16 +100,27 @@ function shapeBatch(b, holidays = [], fallback = {}) {
   // so the card still shows a real "/month". Fall back to the service-level
   // plan, then to days-derived frequency.
   const rawPrice = money(b.price);
+  // A v3 batch carries its own `sessions_per_month` column — for those the
+  // `price` column IS the monthly price (batchesController contract: "price lives
+  // on the batch; per-session is DERIVED as price ÷ sessions"). Only pre-v3
+  // legacy batches (no sessions_per_month) ever stored a per-session figure in
+  // `price`. A stale `price_type:'per_session'` (the wizard's default) must NOT
+  // trigger the multiply for a v3 batch — that was showing the monthly price ×8
+  // at the customer end while the partner correctly showed price/month.
+  const hasV3Sessions = Number.isFinite(Number(b.sessions_per_month)) && Number(b.sessions_per_month) > 0;
   let sessionsPerMonth = Number(b.sessions_per_month);
   if (!Number.isFinite(sessionsPerMonth) || sessionsPerMonth <= 0) {
     sessionsPerMonth = Number(fallback.sessionsPerMonth) || v.deriveSessionsPerMonth(days) || null;
   }
   let pricePerMonth = null;
   let perSession = null;
-  if (rawPrice != null && rawPrice > 0 && b.price_type === 'per_session') {
+  if (rawPrice != null && rawPrice > 0 && b.price_type === 'per_session' && !hasV3Sessions) {
+    // Legacy per-session batch → price is one session; monthly = price × sessions.
     perSession = Math.round(rawPrice);
     pricePerMonth = sessionsPerMonth ? Math.round(rawPrice * sessionsPerMonth) : null;
   } else {
+    // v3 batch (or explicit per_month) → price is the MONTHLY figure; per-session
+    // is derived. Single source of truth, matching the partner form.
     pricePerMonth = rawPrice != null && rawPrice > 0 ? rawPrice : (fallback.pricePerMonth ?? null);
     perSession = pricePerMonth != null && sessionsPerMonth
       ? v.derivePerSessionPrice({ pricePerMonth, sessionsPerMonth })

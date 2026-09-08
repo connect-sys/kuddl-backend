@@ -448,12 +448,30 @@ export async function updateParentProfile(request, env) {
     if (emailTrimmed) {
       try {
         const collision = await env.KUDDL_DB.prepare(
-          'SELECT id FROM parents WHERE LOWER(email) = LOWER(?) AND id != ? LIMIT 1'
+          'SELECT id, phone FROM parents WHERE LOWER(email) = LOWER(?) AND id != ? LIMIT 1'
         ).bind(emailTrimmed, parentId).first();
         if (!collision) {
           parentUpdates.email = emailTrimmed;
         } else {
-          console.log('⚠️ Email already used by another parent — skipping email update:', emailTrimmed);
+          // Is the colliding row just a DUPLICATE of this same person? Compare the
+          // two rows' phones — if they match, the email belongs to the user
+          // anyway, so free it from the duplicate (set NULL) so it can attach to
+          // the row we're editing without tripping the UNIQUE constraint. This was
+          // the silent "email won't save" bug: a user's own duplicate parent row
+          // already held the email, so every update was skipped. Only a genuinely
+          // different person's email is still skipped.
+          const mineRow = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(parentId).first();
+          const digits = (v) => (v ? String(v).replace(/\D/g, '').slice(-10) : '');
+          const collDigits = digits(collision.phone);
+          const mineDigits = digits(mineRow && mineRow.phone) || digits(updateData.phone);
+          if (collDigits && mineDigits && collDigits === mineDigits) {
+            await env.KUDDL_DB.prepare('UPDATE parents SET email = NULL, updated_at = ? WHERE id = ?')
+              .bind(new Date().toISOString(), collision.id).run();
+            parentUpdates.email = emailTrimmed;
+            console.log('ℹ️ Freed email from duplicate parent row', collision.id, '→ reassigning to', parentId);
+          } else {
+            console.log('⚠️ Email already used by a different parent — skipping email update:', emailTrimmed);
+          }
         }
       } catch (emailCheckErr) {
         console.warn('Email-collision check failed, skipping email update:', emailCheckErr?.message);
@@ -883,6 +901,35 @@ export async function getParentBookings(request, env) {
       allParentIds.push(tokenId);
     }
 
+    // Link the viewer's OTHER parent records by EMAIL. A person can have more than
+    // one `parents` row: Google login creates an email-keyed row with a
+    // PLACEHOLDER phone, while OTP/mobile login creates a real-phone row. A
+    // booking gets tagged with whichever identity made it, so without this the
+    // web (Google) viewer never sees a booking made under the phone identity (and
+    // vice-versa). Resolve the viewer's email from any known parent row, then pull
+    // in every parent row that shares it.
+    let viewerEmail = null;
+    try {
+      const idsForEmail = allParentIds.length ? allParentIds : (tokenId ? [tokenId] : []);
+      if (idsForEmail.length) {
+        const ph = idsForEmail.map(() => '?').join(',');
+        const er = await env.KUDDL_DB.prepare(
+          `SELECT email FROM parents WHERE id IN (${ph}) AND email IS NOT NULL AND email != '' LIMIT 1`
+        ).bind(...idsForEmail).first();
+        if (er && er.email) viewerEmail = er.email;
+      }
+      if (viewerEmail) {
+        const emailRows = await env.KUDDL_DB.prepare(
+          `SELECT id FROM parents WHERE LOWER(email) = LOWER(?)`
+        ).bind(viewerEmail).all();
+        for (const r of (emailRows.results || [])) {
+          if (!allParentIds.includes(r.id)) allParentIds.push(r.id);
+        }
+      }
+    } catch (e) {
+      console.warn('email-linking of parent records failed:', e?.message);
+    }
+
     if (allParentIds.length === 0) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
@@ -896,16 +943,29 @@ export async function getParentBookings(request, env) {
     // Use the first parent_id as the primary one
     parentId = allParentIds[0];
 
-    console.log('🔍 Fetching bookings for parent IDs:', allParentIds);
-    
+    console.log('🔍 Fetching bookings for parent IDs:', allParentIds, 'email:', viewerEmail);
+
     // Build query for all parent IDs
     const placeholders = allParentIds.map(() => '?').join(',');
-    
+
+    // Match by parent_id OR by the phone/email captured ON the booking itself
+    // (stored in special_requests.parentDetails). A booking carrying the viewer's
+    // own phone or email is theirs even if its parent_id points at a throwaway or
+    // duplicate parent row — this makes My Bookings resilient to the identity
+    // split above.
+    const orClauses = [`b.parent_id IN (${placeholders})`];
+    const orBinds = [...allParentIds];
+    if (phone10) { orClauses.push(`b.special_requests LIKE ?`); orBinds.push(`%${phone10}%`); }
+    if (viewerEmail) { orClauses.push(`LOWER(b.special_requests) LIKE ?`); orBinds.push(`%${viewerEmail.toLowerCase()}%`); }
+
     // Fetch regular service bookings
     const bookings = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         b.*,
         s.name as service_name,
+        s.category_id as category_id,
+        s.locality as service_locality,
+        s.city as service_city,
         pr.business_name,
         pr.name as provider_name,
         bo.otp_code,
@@ -916,9 +976,9 @@ export async function getParentBookings(request, env) {
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers pr ON b.provider_id = pr.id
       LEFT JOIN booking_otps bo ON b.id = bo.booking_id
-      WHERE b.parent_id IN (${placeholders})
+      WHERE ${orClauses.join(' OR ')}
       ORDER BY b.created_at DESC
-    `).bind(...allParentIds).all();
+    `).bind(...orBinds).all();
     
     // Fetch camp bookings
     const campBookings = await env.KUDDL_DB.prepare(`
@@ -955,12 +1015,23 @@ export async function getParentBookings(request, env) {
         bookingDetails = { specialInstructions: booking.special_requests };
       }
 
+      // Prefer a customer-supplied address (at-home services); otherwise fall
+      // back to the service's own locality/city so the card never shows "N/A".
+      const bookingLocation =
+        bookingDetails.location ||
+        bookingDetails.parentDetails?.address ||
+        booking.service_locality ||
+        booking.service_city ||
+        '';
+
       return {
         id: booking.id,
         bookingType: 'service',
         serviceId: booking.service_id,
         serviceName: booking.service_name || 'Unknown Service',
-        serviceCategory: 'General',
+        serviceCategory: booking.category_id || 'General',
+        category_id: booking.category_id || null,
+        location: bookingLocation,
         providerId: booking.provider_id,
         providerName: booking.business_name || booking.provider_name || 'Unknown Provider',
         bookingDate: booking.booking_date,

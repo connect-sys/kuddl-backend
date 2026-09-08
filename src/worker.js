@@ -3112,9 +3112,13 @@ router.get('/api/products', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
+        -- Visibility unified with the main discovery endpoints (per-module +
+        -- services-all): active service + active provider only. The
+        -- partner_approved gate was dropped here too so a partner active on the
+        -- portal shows in this pincode preview exactly as it does everywhere else
+        -- (item 13 — booking-sync consistency).
         WHERE s.status = 'active'
         AND p.is_active = 1
-        AND COALESCE(s.partner_approved, 1) = 1
         AND (
           (s.available_pincodes IS NOT NULL AND s.available_pincodes LIKE ?) OR
           (s.available_pincodes IS NULL AND p.serviceable_pincodes IS NOT NULL AND p.serviceable_pincodes LIKE ?)
@@ -3923,7 +3927,7 @@ router.get('/api/public/services-all', async (request, env) => {
           p.pincode as provider_pincode,
           -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
           -- the cheapest batch price so the card can show a real price, not 'Free'.
-          (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price,
+          (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived') AS min_batch_price,
           CASE
             WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
             WHEN ? != '' AND p.city IN (SELECT city FROM pincodes WHERE pincode = ?) THEN 2
@@ -3943,12 +3947,11 @@ router.get('/api/public/services-all', async (request, env) => {
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
-            OR s.bloom_pricing IS NOT NULL
             -- Batches only count for BLOOM services. An Adventure/Care service
             -- with no structured pricing but a stray batch (e.g. 'Kalaakul') is
             -- incomplete and must NOT show — matching the website.
             OR (LOWER(s.category_id) LIKE '%bloom%'
-                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived'))
             -- Discover services have no structured pricing blob — a flat price is
             -- their "complete" signal.
             OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
@@ -4564,9 +4567,8 @@ router.get('/api/public/latest', async (request, env) => {
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
-            OR s.bloom_pricing IS NOT NULL
             OR (LOWER(s.category_id) LIKE '%bloom%'
-                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
+                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived'))
             OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )
         ORDER BY s.created_at DESC LIMIT ?
@@ -5801,8 +5803,11 @@ router.get('/api/check-phone', async (request, env) => {
       }, 400);
     }
 
-    // Check for existing phone, excluding current user if provided
-    let query = 'SELECT id FROM providers WHERE phone = ?';
+    // Check for existing phone, excluding current user if provided.
+    // Also return the registered name/business_name so the admin "add partner /
+    // add service by contact number" flow can surface who this number belongs
+    // to instead of silently creating a duplicate (item 7).
+    let query = 'SELECT id, name, business_name FROM providers WHERE phone = ?';
     let params = [phone];
 
     if (currentUserId) {
@@ -5816,6 +5821,9 @@ router.get('/api/check-phone', async (request, env) => {
       success: true,
       available: !existingProvider, // available is opposite of exists
       exists: !!existingProvider,
+      partner: existingProvider
+        ? { id: existingProvider.id, name: existingProvider.name || null, business_name: existingProvider.business_name || null }
+        : null,
       message: existingProvider ? 'Phone number already exists' : 'Phone number available',
       timestamp: new Date().toISOString()
     });

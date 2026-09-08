@@ -100,7 +100,7 @@ export async function getCareServiceList(request, env) {
     // category — assembleCare() flags them incomplete rather than silently
     // excluding them from the query entirely.
     const svcRes = await env.KUDDL_DB
-      .prepare("SELECT * FROM services WHERE status = 'active' AND (care_pricing IS NOT NULL OR LOWER(category_id) LIKE '%care%') ORDER BY created_at DESC LIMIT 60")
+      .prepare("SELECT * FROM services WHERE status = 'active' AND LOWER(category_id) LIKE '%care%' ORDER BY created_at DESC LIMIT 60")
       .all().catch(() => ({ results: [] }));
     const services = svcRes.results || [];
     if (!services.length) return json({ success: true, data: [] });
