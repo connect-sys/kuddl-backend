@@ -972,7 +972,6 @@ export async function getParentBookings(request, env) {
         b.*,
         s.name as service_name,
         s.category_id as category_id,
-        s.locality as service_locality,
         s.city as service_city,
         pr.business_name,
         pr.name as provider_name,
@@ -1028,7 +1027,6 @@ export async function getParentBookings(request, env) {
       const bookingLocation =
         bookingDetails.location ||
         bookingDetails.parentDetails?.address ||
-        booking.service_locality ||
         booking.service_city ||
         '';
 
