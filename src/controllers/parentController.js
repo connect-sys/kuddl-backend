@@ -828,26 +828,30 @@ export async function getParentBookings(request, env) {
     let parentId = null;
     let tokenId = null;
     let tokenPhone = null;
-    
+    let tokenEmail = null;
+
     // Extract token payload
     const authHeader = request.headers.get('Authorization');
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
-      
+
       // Try proper JWT verification first, then fallback to decode
       try {
         const decoded = jwt.decode(token);
         if (decoded && decoded.payload) {
           tokenId = decoded.payload.id;
           tokenPhone = decoded.payload.phone;
-          console.log('🔍 Bookings - Token decoded: id=', tokenId, 'phone=', tokenPhone);
+          // Google-login tokens carry `email` but NO phone — capture it so we can
+          // link bookings made under a phone/OTP identity that share this email.
+          tokenEmail = decoded.payload.email || null;
+          console.log('🔍 Bookings - Token decoded: id=', tokenId, 'phone=', tokenPhone, 'email=', tokenEmail);
         }
       } catch (e) {
         console.log('⚠️ Token decode failed:', e.message);
       }
     }
-    
-    if (!tokenId && !tokenPhone) {
+
+    if (!tokenId && !tokenPhone && !tokenEmail) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
         message: 'Parent authentication required'
@@ -908,15 +912,19 @@ export async function getParentBookings(request, env) {
     // web (Google) viewer never sees a booking made under the phone identity (and
     // vice-versa). Resolve the viewer's email from any known parent row, then pull
     // in every parent row that shares it.
-    let viewerEmail = null;
+    let viewerEmail = tokenEmail || null;
     try {
-      const idsForEmail = allParentIds.length ? allParentIds : (tokenId ? [tokenId] : []);
-      if (idsForEmail.length) {
-        const ph = idsForEmail.map(() => '?').join(',');
-        const er = await env.KUDDL_DB.prepare(
-          `SELECT email FROM parents WHERE id IN (${ph}) AND email IS NOT NULL AND email != '' LIMIT 1`
-        ).bind(...idsForEmail).first();
-        if (er && er.email) viewerEmail = er.email;
+      // Fall back to the email on any of the viewer's known parent rows when the
+      // token itself didn't carry one (e.g. OTP-login tokens).
+      if (!viewerEmail) {
+        const idsForEmail = allParentIds.length ? allParentIds : (tokenId ? [tokenId] : []);
+        if (idsForEmail.length) {
+          const ph = idsForEmail.map(() => '?').join(',');
+          const er = await env.KUDDL_DB.prepare(
+            `SELECT email FROM parents WHERE id IN (${ph}) AND email IS NOT NULL AND email != '' LIMIT 1`
+          ).bind(...idsForEmail).first();
+          if (er && er.email) viewerEmail = er.email;
+        }
       }
       if (viewerEmail) {
         const emailRows = await env.KUDDL_DB.prepare(
