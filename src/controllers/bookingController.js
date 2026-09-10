@@ -53,8 +53,8 @@ export async function createBooking(request, env) {
       providerId: providerIdFromClient,
       selectedDate,
       selectedEndDate,
-      startTime,
-      endTime,
+      startTime: startTimeRaw,
+      endTime: endTimeRaw,
       recurring,
       parentDetails,
       children,
@@ -121,11 +121,33 @@ export async function createBooking(request, env) {
       }
     }
 
-    // Validate required fields
-    if (!serviceId || !providerId || !selectedDate || !startTime || !endTime || !parentDetails) {
+    // Start/end time are mutable: a Bloom monthly/trial batch carries its daily
+    // time in its schedule, but the app only prefills it when the batch also has
+    // a start_date — batches without a start_date sent EMPTY times, which failed
+    // the "required" check below AFTER the customer had already paid. Recover the
+    // time from the batch (via batchId) so the booking still records the real
+    // 09:00–10:00 slot.
+    let startTime = startTimeRaw || '';
+    let endTime = endTimeRaw || '';
+    if ((!startTime || !endTime) && batchId) {
+      try {
+        const bRow = await env.KUDDL_DB.prepare('SELECT schedule FROM batches WHERE id = ?').bind(batchId).first();
+        let sched = {};
+        try { sched = JSON.parse(bRow?.schedule || '{}'); } catch { /* leave empty */ }
+        startTime = startTime || sched.start_time || '';
+        endTime = endTime || sched.end_time || '';
+      } catch (e) {
+        console.warn('batch time resolution failed:', e?.message);
+      }
+    }
+
+    // Validate required fields. NOTE: start/end time are NOT required — monthly /
+    // trial / period (Bloom) enrolments legitimately have no single daily time,
+    // and blocking them here was rejecting fully-paid bookings.
+    if (!serviceId || !providerId || !selectedDate || !parentDetails) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
-        message: 'Service ID, provider ID, date, start/end time, and parent details are required'
+        message: 'Service ID, provider ID, date, and parent details are required'
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
@@ -295,19 +317,23 @@ export async function createBooking(request, env) {
       }));
     }
 
-    // Calculate duration
-    const [startHour, startMin] = startTime.split(':').map(Number);
-    const [endHour, endMin] = endTime.split(':').map(Number);
-    const durationMinutes = ((endHour * 60) + endMin) - ((startHour * 60) + startMin);
-
-    if (durationMinutes <= 0) {
+    // Calculate duration — only for time-slot bookings that actually have both
+    // times. Monthly / trial / period (Bloom) enrolments have no daily time, so
+    // duration is 0 and the "end after start" check is skipped for them.
+    let durationMinutes = 0;
+    if (startTime && endTime && startTime.includes(':') && endTime.includes(':')) {
+      const [startHour, startMin] = startTime.split(':').map(Number);
+      const [endHour, endMin] = endTime.split(':').map(Number);
+      durationMinutes = ((endHour * 60) + endMin) - ((startHour * 60) + startMin);
+      if (durationMinutes <= 0) {
         return addCorsHeaders(new Response(JSON.stringify({
-            success: false,
-            message: 'Invalid duration. End time must be after start time.'
+          success: false,
+          message: 'Invalid duration. End time must be after start time.'
         }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
         }));
+      }
     }
 
     // Calculate platform fee (5%).
