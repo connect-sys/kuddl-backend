@@ -42,6 +42,7 @@ import * as taxonomyController from './controllers/taxonomyController.js';
 import * as taxonomyReconcileController from './controllers/taxonomyReconcileController.js';
 import * as addBloomServiceColumnsController from './controllers/addBloomServiceColumnsController.js';
 import * as bloomServiceController from './controllers/bloomServiceController.js';
+import * as debugBookingsController from './controllers/debugBookingsController.js';
 import * as addAdventureServiceColumnsController from './controllers/addAdventureServiceColumnsController.js';
 import * as adventureServiceController from './controllers/adventureServiceController.js';
 import * as addCareServiceColumnsController from './controllers/addCareServiceColumnsController.js';
