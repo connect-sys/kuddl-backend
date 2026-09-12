@@ -343,9 +343,16 @@ export async function verify(request, env) {
 
     // Check if it's an admin token
     if (decoded.role === 'admin') {
+      // Look up the admin by id and treat ONLY an explicit is_active=0 as
+      // deactivated. The admins row is seeded with is_active DEFAULT 1, but
+      // some rows have it stored as NULL — which silently failed the strict
+      // `AND is_active = 1` check here and logged admins out on every hard
+      // refresh (login has no such filter, so login kept working). Aligning
+      // this with login fixes the "refresh kicks me to /login" bug.
       user = await env.KUDDL_DB.prepare(
-        'SELECT * FROM admins WHERE id = ? AND is_active = ?'
-      ).bind(decoded.id, 1).first();
+        'SELECT * FROM admins WHERE id = ?'
+      ).bind(decoded.id).first();
+      if (user && Number(user.is_active) === 0) user = null;
 
       if (user) {
         userRole = 'admin';
@@ -465,10 +472,13 @@ export async function refresh(request, env) {
     let userRole = null;
     let userName = null;
 
-    // Try to find the user in admins table first
+    // Try to find the user in admins table first. Match verify(): look up by
+    // id and reject only an explicit is_active=0, so a NULL is_active admin
+    // can still refresh instead of being logged out on hard refresh.
     user = await env.KUDDL_DB.prepare(
-      'SELECT * FROM admins WHERE id = ? AND is_active = ?'
-    ).bind(decoded.id, 1).first();
+      'SELECT * FROM admins WHERE id = ?'
+    ).bind(decoded.id).first();
+    if (user && Number(user.is_active) === 0) user = null;
 
     if (user) {
       userRole = 'admin';
