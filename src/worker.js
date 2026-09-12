@@ -138,6 +138,16 @@ router.get('/api/categories/module', (request, env) => categoriesController.getC
 router.get('/api/subcategories', (request, env) => categoriesController.getSubcategories(request, env));
 router.get('/api/child-subcategories', (request, env) => categoriesController.getChildSubcategories(request, env));
 
+// Admin taxonomy manager (category + subcategory CRUD, image per category/subcategory).
+// All admin-gated inside the controller (requireAdmin).
+router.get('/api/admin/categories', (request, env) => categoriesController.getCategoriesAdmin(request, env));
+router.post('/api/admin/categories', (request, env) => categoriesController.createCategory(request, env));
+router.put('/api/admin/categories/:id', (request, env) => categoriesController.updateCategory(request, env));
+router.delete('/api/admin/categories/:id', (request, env) => categoriesController.deleteCategory(request, env));
+router.post('/api/admin/subcategories', (request, env) => categoriesController.createSubcategory(request, env));
+router.put('/api/admin/subcategories/:id', (request, env) => categoriesController.updateSubcategory(request, env));
+router.delete('/api/admin/subcategories/:id', (request, env) => categoriesController.deleteSubcategory(request, env));
+
 // Service Type Registry routes (Deliverable 1 — smart category picker + config for Add Service form)
 router.get('/api/service-types/search', (request, env) => serviceTypeController.searchServiceTypes(request, env));
 router.get('/api/service-types', (request, env) => serviceTypeController.listServiceTypes(request, env));
