@@ -1782,7 +1782,10 @@ export async function getAllServicesForAdmin(request, env) {
         p.name as provider_name,
         p.email as provider_email,
         p.phone as provider_phone,
-        c.name as category_name
+        c.name as category_name,
+        -- Bloom keeps its price on the batches (services.price is 0), so surface
+        -- the cheapest batch price for the admin list to display "from ₹X/mo".
+        (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       LEFT JOIN categories c ON s.category_id = c.id
