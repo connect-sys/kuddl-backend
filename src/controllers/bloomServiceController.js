@@ -93,6 +93,8 @@ export function mapRowsToBloomRaw(serviceRow = {}, providerRow = {}, batchRows =
       description: serviceRow.description || null,
       // v3 · C3 — canonical sub-category id + resolved label.
       subcategory_id: serviceRow.subcategory_id || null,
+      // Partner search/marketing tags — shown as chips on the detail page.
+      tags: parseJson(serviceRow.tags, []),
     },
     provider: {
       id: providerRow.id,

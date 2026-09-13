@@ -36,6 +36,7 @@ export function mapRowsToAdventureRaw(serviceRow = {}, providerRow = {}) {
       gallery_images: parseJson(serviceRow.image_urls, []),
       locality: serviceRow.city,
       created_at: serviceRow.created_at,
+      tags: parseJson(serviceRow.tags, []),
     },
     provider: {
       business_name: providerRow.business_name,

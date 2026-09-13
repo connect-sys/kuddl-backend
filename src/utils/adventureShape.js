@@ -98,6 +98,7 @@ export function assembleAdventure(raw = {}) {
       ? Number(provider.experience_years) : null,
     primaryImage: s.primary_image_url || null,
     gallery: Array.isArray(s.gallery_images) ? s.gallery_images : [],
+    tags: Array.isArray(s.tags) ? s.tags : [],
     subcategory: s.subcategory_label || s.subcategory || null,
     // §05/§F — which of the 9 Adventure types this is, + the type-specific
     // fields (photography delivery days, bouncy footprint, MOQ, etc.) passed

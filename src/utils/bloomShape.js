@@ -269,6 +269,7 @@ export function assembleBloom(raw = {}) {
     gallery: Array.isArray(s.gallery_images) ? s.gallery_images : [],
     subcategory: s.subcategory_label || s.subcategory || null,
     subcategoryId: s.subcategory_id || null,
+    tags: Array.isArray(s.tags) ? s.tags : [],
     languages: typeof s.languages === 'string' ? s.languages.split(',').map((x) => x.trim()).filter(Boolean) : (s.languages || []),
     trial,
     monthlyPlans,

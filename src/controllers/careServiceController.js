@@ -36,6 +36,7 @@ export function mapRowsToCareRaw(serviceRow = {}, providerRow = {}) {
       locality: serviceRow.city,
       mode: cp.mode,
       created_at: serviceRow.created_at,
+      tags: parseJson(serviceRow.tags, []),
     },
     provider: {
       business_name: providerRow.business_name,

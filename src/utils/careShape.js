@@ -116,6 +116,7 @@ export function assembleCare(raw = {}) {
       ? Number(provider.experience_years) : null,
     primaryImage: s.primary_image_url || null,
     gallery: Array.isArray(s.gallery_images) ? s.gallery_images : [],
+    tags: Array.isArray(s.tags) ? s.tags : [],
     subcategory: s.subcategory_label || s.subcategory || null,
     sessionPrice,
     sessionDurationMinutes,
