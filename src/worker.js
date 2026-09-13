@@ -2937,6 +2937,11 @@ router.put('/api/admin/partners/:id/verify', async (request, env) => {
   return adminController.updatePartnerVerification(request, env);
 });
 
+// Admin edits a partner's profile (same fields the partner can self-edit).
+router.put('/api/admin/partners/:id/profile', async (request, env) => {
+  return adminController.updatePartnerProfileByAdmin(request, env);
+});
+
 router.get('/api/admin/dashboard-stats', async (request, env) => {
   return adminController.getDashboardStats(request, env);
 });

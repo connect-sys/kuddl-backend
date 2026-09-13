@@ -3293,3 +3293,77 @@ export async function getAllPartners(request, env) {
     }));
   }
 }
+
+// Admin edits a partner's (provider's) profile. Accepts the same fields the
+// partner can self-edit; introspects columns so schema drift can't 500.
+export async function updatePartnerProfileByAdmin(request, env) {
+  try {
+    const admin = await requireAdmin(request, env);
+    if (admin instanceof Response) return admin;
+
+    const partnerId = request.params?.id;
+    if (!partnerId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Partner id is required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const body = await request.json().catch(() => ({}));
+    // Normalise camelCase → the provider column names.
+    const map = {
+      name: 'name', businessName: 'business_name', business_name: 'business_name',
+      email: 'email', phone: 'phone', dateOfBirth: 'date_of_birth', date_of_birth: 'date_of_birth',
+      gender: 'gender', address: 'address', city: 'city', state: 'state', area: 'area', pincode: 'pincode',
+      serviceCategories: 'service_categories', service_categories: 'service_categories',
+      specificServices: 'specific_services', specific_services: 'specific_services',
+      ageGroups: 'age_groups', age_groups: 'age_groups',
+      experienceYears: 'experience_years', experience_years: 'experience_years',
+      qualifications: 'qualifications', description: 'bio', bio: 'bio', languages: 'languages',
+      venueAddress: 'venue_address', venue_address: 'venue_address',
+      cancellationPolicy: 'cancellation_policy', cancellation_policy: 'cancellation_policy',
+      instagramHandle: 'instagram_handle', instagram_handle: 'instagram_handle',
+      registrationNumber: 'registration_number', registration_number: 'registration_number',
+      partnerType: 'partner_type', partner_type: 'partner_type',
+      latitude: 'latitude', longitude: 'longitude',
+      accountHolder: 'account_holder_name', account_holder_name: 'account_holder_name',
+      bankName: 'bank_name', bank_name: 'bank_name', accountNumber: 'account_number', account_number: 'account_number',
+      ifscCode: 'ifsc_code', ifsc_code: 'ifsc_code', accountType: 'account_type', account_type: 'account_type', upiId: 'upi_id', upi_id: 'upi_id',
+    };
+    const updates = {};
+    for (const [k, v] of Object.entries(body)) {
+      if (v === undefined) continue;
+      const col = map[k];
+      if (col && !(col in updates)) updates[col] = v;
+    }
+    if (Object.keys(updates).length === 0) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'No updatable fields provided' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Ensure optional columns exist (registration_number), then keep only real columns.
+    try {
+      const info = await env.KUDDL_DB.prepare(`PRAGMA table_info(providers)`).all();
+      const cols = new Set((info.results || []).map((r) => r.name));
+      if ('registration_number' in updates && !cols.has('registration_number')) {
+        await env.KUDDL_DB.prepare(`ALTER TABLE providers ADD COLUMN registration_number TEXT`).run();
+        cols.add('registration_number');
+      }
+      for (const key of Object.keys(updates)) if (!cols.has(key)) delete updates[key];
+    } catch (e) { console.log('admin update column-ensure skipped:', e.message); }
+
+    if (Object.keys(updates).length === 0) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'No fields match the current schema' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const setClause = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
+    const values = [...Object.values(updates), new Date().toISOString(), partnerId];
+    await env.KUDDL_DB.prepare(`UPDATE providers SET ${setClause}, updated_at = ? WHERE id = ?`).bind(...values).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Partner profile updated', updated: Object.keys(updates) }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('updatePartnerProfileByAdmin error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to update partner profile', error: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
