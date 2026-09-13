@@ -1143,6 +1143,8 @@ router.put('/api/partner/profile', async (request, env) => {
     // Instagram / website — ops-only, never shown to parents.
     if (typeof payload.instagram_handle === 'string') updates.instagram_handle = payload.instagram_handle;
     else if (typeof payload.instagram === 'string') updates.instagram_handle = payload.instagram;
+    // Care partners: optional professional/clinic registration number.
+    if (typeof payload.registration_number === 'string') updates.registration_number = payload.registration_number;
 
     // Profile completion tracking
     if (typeof payload.last_completed_step !== 'undefined') {
@@ -1206,6 +1208,18 @@ router.put('/api/partner/profile', async (request, env) => {
         success: false,
         message: 'No valid fields to update'
       }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    // Ensure the optional Care registration_number column exists before we
+    // introspect (D1 has no ADD COLUMN IF NOT EXISTS), so it can be saved.
+    if (typeof updates.registration_number === 'string') {
+      try {
+        const info = await env.KUDDL_DB.prepare(`PRAGMA table_info(providers)`).all();
+        const cols = new Set((info.results || []).map((r) => r.name));
+        if (!cols.has('registration_number')) {
+          await env.KUDDL_DB.prepare(`ALTER TABLE providers ADD COLUMN registration_number TEXT`).run();
+        }
+      } catch (e) { console.log('registration_number column ensure skipped:', e.message); }
     }
 
     // Introspect existing columns to avoid SQL errors when schemas differ
