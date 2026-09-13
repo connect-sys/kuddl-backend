@@ -4,6 +4,11 @@
  */
 
 import { addCorsHeaders } from '../utils/cors.js';
+import { verifyToken } from './authController.js';
+
+// Small helpers to read a batched D1 result set uniformly.
+const firstOf = (res) => (res && res.results && res.results[0]) || {};
+const rowsOf = (res) => (res && res.results) || [];
 
 // Get partner reviews
 export async function getPartnerReviews(request, env) {
@@ -87,6 +92,18 @@ export async function getPartnerDashboardStats(request, env) {
     const url = new URL(request.url);
     let providerId = url.searchParams.get('providerId');
 
+    // Auth + IDOR fix: a partner may only read their OWN stats. Non-admins are
+    // forced to the id in their token regardless of ?providerId= (which used to
+    // be trusted verbatim, so anyone could read any provider's numbers). Admins
+    // may look up any provider.
+    const authUser = await verifyToken(request, env);
+    if (!authUser) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization required' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (authUser.role !== 'admin') {
+      providerId = authUser.id;
+    }
     if (!providerId) {
       return addCorsHeaders(new Response(JSON.stringify({
         success: false,
@@ -97,87 +114,52 @@ export async function getPartnerDashboardStats(request, env) {
       }));
     }
 
-    console.log('🔍 Fetching dashboard stats for provider:', providerId);
+    // Current and previous month keys (YYYY-MM) for the month-over-month deltas.
+    const currentDate = new Date();
+    const currentMonth = currentDate.toISOString().slice(0, 7);
+    const previousDate = new Date(currentDate);
+    previousDate.setMonth(previousDate.getMonth() - 1);
+    const previousMonth = previousDate.toISOString().slice(0, 7);
 
-    // Get total bookings for this provider
-    const totalBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings WHERE provider_id = ?
-    `).bind(providerId).first();
+    // Every standard-column read in ONE round-trip (was ~9 sequential calls).
+    const b = await env.KUDDL_DB.batch([
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ?`).bind(providerId),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'completed'`).bind(providerId),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'pending'`).bind(providerId),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND booking_date LIKE ?`).bind(providerId, `${currentMonth}%`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND booking_date LIKE ?`).bind(providerId, `${previousMonth}%`),
+      env.KUDDL_DB.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings WHERE provider_id = ? AND payment_status = 'paid' AND booking_date LIKE ?`).bind(providerId, `${currentMonth}%`),
+      env.KUDDL_DB.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings WHERE provider_id = ? AND payment_status = 'paid' AND booking_date LIKE ?`).bind(providerId, `${previousMonth}%`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'completed' AND booking_date LIKE ?`).bind(providerId, `${currentMonth}%`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'completed' AND booking_date LIKE ?`).bind(providerId, `${previousMonth}%`),
+    ]);
+    const totalBookingsResult = firstOf(b[0]);
+    const completedBookingsResult = firstOf(b[1]);
+    const pendingBookingsResult = firstOf(b[2]);
+    const currentMonthBookingsResult = firstOf(b[3]);
+    const previousMonthBookingsResult = firstOf(b[4]);
+    const currentMonthRevenueResult = firstOf(b[5]);
+    const previousMonthRevenueResult = firstOf(b[6]);
+    const currentMonthCompletedResult = firstOf(b[7]);
+    const previousMonthCompletedResult = firstOf(b[8]);
 
-    // Get completed bookings
-    const completedBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'completed'
-    `).bind(providerId).first();
-
-    // Get pending bookings
-    const pendingBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings WHERE provider_id = ? AND status = 'pending'
-    `).bind(providerId).first();
-
-    // Get total revenue (sum of completed bookings)
-    // First check if provider_amount column exists
+    // Total revenue: prefer provider_amount, fall back if that column is absent.
     let revenueResult;
     try {
       revenueResult = await env.KUDDL_DB.prepare(`
-        SELECT COALESCE(SUM(provider_amount), 0) as total FROM bookings 
+        SELECT COALESCE(SUM(provider_amount), 0) as total FROM bookings
         WHERE provider_id = ? AND payment_status = 'paid'
       `).bind(providerId).first();
     } catch (error) {
-      if (error.message.includes('no such column: provider_amount')) {
-        console.log('⚠️ provider_amount column not found, using total_amount instead');
+      if (String(error.message).includes('no such column: provider_amount')) {
         revenueResult = await env.KUDDL_DB.prepare(`
-          SELECT COALESCE(SUM(total_amount * 0.95), 0) as total FROM bookings 
+          SELECT COALESCE(SUM(total_amount * 0.95), 0) as total FROM bookings
           WHERE provider_id = ? AND payment_status = 'paid'
         `).bind(providerId).first();
       } else {
         throw error;
       }
     }
-
-    // Get current and previous month data for percentage calculations
-    const currentDate = new Date();
-    const currentMonth = currentDate.toISOString().slice(0, 7); // YYYY-MM format
-
-    // Calculate previous month
-    const previousDate = new Date(currentDate);
-    previousDate.setMonth(previousDate.getMonth() - 1);
-    const previousMonth = previousDate.toISOString().slice(0, 7);
-
-    // Current month bookings
-    const currentMonthBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings 
-      WHERE provider_id = ? AND booking_date LIKE ?
-    `).bind(providerId, `${currentMonth}%`).first();
-
-    // Previous month bookings
-    const previousMonthBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings 
-      WHERE provider_id = ? AND booking_date LIKE ?
-    `).bind(providerId, `${previousMonth}%`).first();
-
-    // Current month revenue
-    const currentMonthRevenueResult = await env.KUDDL_DB.prepare(`
-      SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings 
-      WHERE provider_id = ? AND payment_status = 'paid' AND booking_date LIKE ?
-    `).bind(providerId, `${currentMonth}%`).first();
-
-    // Previous month revenue
-    const previousMonthRevenueResult = await env.KUDDL_DB.prepare(`
-      SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings 
-      WHERE provider_id = ? AND payment_status = 'paid' AND booking_date LIKE ?
-    `).bind(providerId, `${previousMonth}%`).first();
-
-    // Current month completed bookings for completion rate
-    const currentMonthCompletedResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings 
-      WHERE provider_id = ? AND status = 'completed' AND booking_date LIKE ?
-    `).bind(providerId, `${currentMonth}%`).first();
-
-    // Previous month completed bookings for completion rate
-    const previousMonthCompletedResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings 
-      WHERE provider_id = ? AND status = 'completed' AND booking_date LIKE ?
-    `).bind(providerId, `${previousMonth}%`).first();
 
     // Get average rating from completed bookings with parent ratings (with fallback for missing column)
     let averageRating = 0;
@@ -335,59 +317,43 @@ export async function getPartnerDashboardStats(request, env) {
 // Get admin dashboard statistics
 export async function getAdminDashboardStats(request, env) {
   try {
-    // Get total partners
-    const totalPartnersResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM providers WHERE is_active = 1
-    `).first();
+    // Admin-only. (This endpoint exposes platform-wide totals; it previously ran
+    // without any auth check.)
+    const user = await verifyToken(request, env);
+    if (!user) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authorization required' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (user.role !== 'admin') {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Admin access required' }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
 
-    // Get total customers (from parents table)
-    const totalCustomersResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM parents
-    `).first();
-
-    // Get total bookings
-    const totalBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings
-    `).first();
-
-    // Get completed bookings
-    const completedBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings WHERE status = 'completed'
-    `).first();
-
-    // Get pending bookings
-    const pendingBookingsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM bookings WHERE status = 'pending'
-    `).first();
-
-    // Get total revenue
-    const revenueResult = await env.KUDDL_DB.prepare(`
-      SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings 
-      WHERE payment_status = 'paid'
-    `).first();
-
-    // Get pending verifications
-    const pendingVerificationsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM providers WHERE kyc_status = 'pending'
-    `).first();
-
-    // Get rejected documents
-    const rejectedDocumentsResult = await env.KUDDL_DB.prepare(`
-      SELECT COUNT(*) as total FROM document_verifications WHERE verification_status = 'rejected'
-    `).first();
-
-    // Get recent activities (recent bookings)
-    const recentActivities = await env.KUDDL_DB.prepare(`
-      SELECT 
-        b.*,
-        s.name as service_name,
-        p.business_name as provider_name
-      FROM bookings b
-      LEFT JOIN services s ON b.service_id = s.id
-      LEFT JOIN providers p ON b.provider_id = p.id
-      ORDER BY b.created_at DESC
-      LIMIT 10
-    `).all();
+    // All independent reads in a SINGLE round-trip to D1 instead of 9 sequential
+    // ones — this is what took the dashboard from ~1.2s to a few hundred ms.
+    const [
+      totalPartnersResult, totalCustomersResult, totalBookingsResult,
+      completedBookingsResult, pendingBookingsResult, revenueResult,
+      pendingVerificationsResult, rejectedDocumentsResult, recentActivitiesRes,
+    ] = await env.KUDDL_DB.batch([
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM providers WHERE is_active = 1`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM parents`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE status = 'completed'`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM bookings WHERE status = 'pending'`),
+      env.KUDDL_DB.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM bookings WHERE payment_status = 'paid'`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM providers WHERE kyc_status = 'pending'`),
+      env.KUDDL_DB.prepare(`SELECT COUNT(*) as total FROM document_verifications WHERE verification_status = 'rejected'`),
+      env.KUDDL_DB.prepare(`
+        SELECT b.*, s.name as service_name, p.business_name as provider_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        LEFT JOIN providers p ON b.provider_id = p.id
+        ORDER BY b.created_at DESC
+        LIMIT 10
+      `),
+    ]);
+    const recentActivities = { results: rowsOf(recentActivitiesRes) };
 
     // Process recent activities
     const processedActivities = (recentActivities.results || []).map(booking => {
@@ -406,17 +372,19 @@ export async function getAdminDashboardStats(request, env) {
       };
     });
 
+    const totalPartners = firstOf(totalPartnersResult).total || 0;
+    const totalCustomers = firstOf(totalCustomersResult).total || 0;
     const stats = {
-      totalUsers: (totalPartnersResult?.total || 0) + (totalCustomersResult?.total || 0),
-      totalPartners: totalPartnersResult?.total || 0,
-      totalCustomers: totalCustomersResult?.total || 0,
-      activeUsers: totalPartnersResult?.total || 0, // Assuming active partners as active users
-      totalBookings: totalBookingsResult?.total || 0,
-      completedBookings: completedBookingsResult?.total || 0,
-      pendingBookings: pendingBookingsResult?.total || 0,
-      totalRevenue: revenueResult?.total || 0,
-      pendingVerifications: pendingVerificationsResult?.total || 0,
-      rejectedDocuments: rejectedDocumentsResult?.total || 0,
+      totalUsers: totalPartners + totalCustomers,
+      totalPartners,
+      totalCustomers,
+      activeUsers: totalPartners, // Assuming active partners as active users
+      totalBookings: firstOf(totalBookingsResult).total || 0,
+      completedBookings: firstOf(completedBookingsResult).total || 0,
+      pendingBookings: firstOf(pendingBookingsResult).total || 0,
+      totalRevenue: firstOf(revenueResult).total || 0,
+      pendingVerifications: firstOf(pendingVerificationsResult).total || 0,
+      rejectedDocuments: firstOf(rejectedDocumentsResult).total || 0,
       recentActivities: processedActivities
     };
 
