@@ -3369,3 +3369,40 @@ export async function updatePartnerProfileByAdmin(request, env) {
       { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }
+
+// Admin generates a NEW temporary password for a partner and returns it ONCE.
+// (Existing passwords are bcrypt-hashed and cannot be read back — this is the
+// secure way for an admin to hand a partner working credentials.)
+export async function resetPartnerPassword(request, env) {
+  try {
+    const admin = await requireAdmin(request, env);
+    if (admin instanceof Response) return admin;
+
+    const partnerId = request.params?.id;
+    if (!partnerId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Partner id is required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const partner = await env.KUDDL_DB.prepare('SELECT id, email, phone FROM providers WHERE id = ?').bind(partnerId).first();
+    if (!partner) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Partner not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const tempPassword = (generateRandomPassword ? generateRandomPassword(10) : (Math.random().toString(36).slice(2, 10) + 'A1'));
+    const hashed = await bcrypt.hash(tempPassword, 10);
+    await env.KUDDL_DB.prepare('UPDATE providers SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .bind(hashed, new Date().toISOString(), partnerId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      message: 'Temporary password generated',
+      credentials: { email: partner.email || '', phone: partner.phone || '', temporaryPassword: tempPassword },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('resetPartnerPassword error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Failed to generate temporary password', error: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}

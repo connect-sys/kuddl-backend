@@ -2942,6 +2942,11 @@ router.put('/api/admin/partners/:id/profile', async (request, env) => {
   return adminController.updatePartnerProfileByAdmin(request, env);
 });
 
+// Admin generates a new temporary password for a partner (returned once).
+router.post('/api/admin/partners/:id/reset-password', async (request, env) => {
+  return adminController.resetPartnerPassword(request, env);
+});
+
 router.get('/api/admin/dashboard-stats', async (request, env) => {
   return adminController.getDashboardStats(request, env);
 });
