@@ -388,7 +388,7 @@ export async function verifyBankAccount(request, env) {
         ifsc: ifsc_code,
         account_number: account_number,
         name: account_holder_name,
-        phone: phone || '9999999999'
+        phone: phone 
       })
     });
 
