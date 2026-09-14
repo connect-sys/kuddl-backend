@@ -3982,13 +3982,12 @@ router.get('/api/public/services-all', async (request, env) => {
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
-            -- Batches only count for BLOOM services. An Adventure/Care service
-            -- with no structured pricing but a stray batch (e.g. 'Kalaakul') is
-            -- incomplete and must NOT show — matching the website.
-            OR (LOWER(s.category_id) LIKE '%bloom%'
+            -- Batches count for BLOOM and DISCOVER services (Discover now uses
+            -- the Bloom form, so its price lives on the batches, not services.price).
+            -- An Adventure/Care service with a stray batch stays hidden.
+            OR ((LOWER(s.category_id) LIKE '%bloom%' OR LOWER(s.category_id) LIKE '%discover%')
                 AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived'))
-            -- Discover services have no structured pricing blob — a flat price is
-            -- their "complete" signal.
+            -- Legacy Discover services stored a flat price on the service row.
             OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )
       `;
