@@ -3318,6 +3318,8 @@ export async function updatePartnerProfileByAdmin(request, env) {
       ageGroups: 'age_groups', age_groups: 'age_groups',
       experienceYears: 'experience_years', experience_years: 'experience_years',
       qualifications: 'qualifications', description: 'bio', bio: 'bio', languages: 'languages',
+      serviceablePincodes: 'serviceable_pincodes', serviceable_pincodes: 'serviceable_pincodes',
+      branchName: 'branch_name', branch_name: 'branch_name',
       venueAddress: 'venue_address', venue_address: 'venue_address',
       cancellationPolicy: 'cancellation_policy', cancellation_policy: 'cancellation_policy',
       instagramHandle: 'instagram_handle', instagram_handle: 'instagram_handle',
