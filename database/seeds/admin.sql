@@ -17,7 +17,7 @@ INSERT OR REPLACE INTO admins (
     'admin_super_001',
     'Super Admin',
     'admin@kuddl.co',
-    '+919999999999',
+    '+919311935596',
     '$2b$12$LQv3c1yqBwlVHpPjrSM.NO3rS.CE9FipFCjQjMQv2BQbVDEVXeO7u', -- password: Admin@123
     'super_admin',
     '["all"]',

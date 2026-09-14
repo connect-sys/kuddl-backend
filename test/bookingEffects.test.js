@@ -7,7 +7,7 @@ describe('bookingEffects.buildProviderPayload — §06 provider never sees the p
     serviceName: 'Little Steps Ballet', date: '2026-10-14', time: '17:00',
     childFirstName: 'Aarav', childAge: 6, specialInstructions: 'Shy at first',
     // Sensitive parent fields that must NEVER reach the provider:
-    parentPhone: '+919999999999', parentEmail: 'mom@example.com', parentFullName: 'Priya Sharma',
+    parentPhone: '+919311935596', parentEmail: 'mom@example.com', parentFullName: 'Priya Sharma',
   };
 
   it('includes only the safe fields the provider needs', () => {
@@ -25,7 +25,7 @@ describe('bookingEffects.buildProviderPayload — §06 provider never sees the p
 
   it('never leaks the parent phone / email / full name in any form', () => {
     const serialized = JSON.stringify(buildProviderPayload(ctx));
-    expect(serialized).not.toContain('9999999999');
+    expect(serialized).not.toContain('9311935596');
     expect(serialized).not.toContain('mom@example.com');
     expect(serialized).not.toContain('Priya');
     expect(Object.keys(buildProviderPayload(ctx))).not.toContain('parent_phone');
@@ -35,7 +35,7 @@ describe('bookingEffects.buildProviderPayload — §06 provider never sees the p
     const body = providerEmailText(buildProviderPayload(ctx));
     expect(body).toContain('Little Steps Ballet');
     expect(body).toContain('Aarav (age 6)');
-    expect(body).not.toContain('9999999999');
+    expect(body).not.toContain('9311935596');
     expect(body).not.toContain('mom@example.com');
     expect(body).not.toContain('Priya');
   });
