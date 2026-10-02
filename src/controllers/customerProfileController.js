@@ -125,21 +125,28 @@ export async function getCustomerBookings(request, env) {
     const limit = parseInt(url.searchParams.get('limit') || '10');
     const offset = (page - 1) * limit;
 
+    // Bookings may have been created under any of the parent's duplicate phone-id rows.
+    const ids = await resolveCustomerIds(request, env, customerId);
+    const ph = ids.map(() => '?').join(',');
+
     let query = `
-      SELECT b.*, 
-             s.name as service_name, 
+      SELECT b.*,
+             s.name as service_name,
              s.price as service_price,
+             s.primary_image_url as service_image,
+             s.image_urls as service_images,
              p.business_name as provider_name,
              p.name as provider_display_name,
+             p.profile_picture as provider_image,
              p.phone as provider_phone,
              p.city as provider_city
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN providers p ON b.provider_id = p.id
-      WHERE b.parent_id = ?
+      WHERE b.parent_id IN (${ph})
     `;
 
-    const params = [customerId];
+    const params = [...ids];
 
     if (status !== 'all') {
       query += ' AND b.status = ?';
@@ -152,8 +159,8 @@ export async function getCustomerBookings(request, env) {
     const bookings = await env.KUDDL_DB.prepare(query).bind(...params).all();
 
     // Get total count
-    let countQuery = 'SELECT COUNT(*) as total FROM bookings WHERE parent_id = ?';
-    const countParams = [customerId];
+    let countQuery = `SELECT COUNT(*) as total FROM bookings WHERE parent_id IN (${ph})`;
+    const countParams = [...ids];
     if (status !== 'all') {
       countQuery += ' AND status = ?';
       countParams.push(status);
@@ -339,6 +346,7 @@ export async function getCustomerReviews(request, env) {
              p.name as provider_display_name,
              p.city as provider_city,
              p.profile_picture as provider_image,
+             s.id as service_id,
              s.name as service_name,
              s.primary_image_url as service_image
       FROM customer_reviews r
@@ -362,6 +370,38 @@ export async function getCustomerReviews(request, env) {
       status: 500,
       headers: addCorsHeaders({ 'Content-Type': 'application/json' })
     });
+  }
+}
+
+// Public: all approved reviews for the provider behind a service, with the
+// reviewer's name + photos. Powers the "Reviews" section on the service detail.
+export async function getPublicServiceReviews(request, env, serviceId) {
+  try {
+    if (!serviceId) {
+      return new Response(JSON.stringify({ success: false, message: 'Service id required' }), { status: 400, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    const svc = await env.KUDDL_DB.prepare('SELECT provider_id FROM services WHERE id = ?').bind(serviceId).first();
+    if (!svc || !svc.provider_id) {
+      return new Response(JSON.stringify({ success: true, data: [], average: 0, count: 0 }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    // `photos` is added on first write; ensure it exists so this read never
+    // 500s on a prod DB that hasn't stored a photo review yet.
+    try { await env.KUDDL_DB.prepare("ALTER TABLE customer_reviews ADD COLUMN photos TEXT").run(); } catch { /* already exists */ }
+    const rows = await env.KUDDL_DB.prepare(`
+      SELECT r.id, r.rating, r.review_text, r.photos, r.created_at,
+             par.fullname AS reviewer_name, par.profile_picture AS reviewer_avatar
+      FROM customer_reviews r
+      LEFT JOIN parents par ON r.customer_id = par.id
+      WHERE r.provider_id = ? AND COALESCE(r.status, 'approved') = 'approved'
+      ORDER BY r.created_at DESC
+    `).bind(svc.provider_id).all();
+    const data = rows.results || [];
+    const count = data.length;
+    const average = count ? Math.round((data.reduce((s, r) => s + (Number(r.rating) || 0), 0) / count) * 10) / 10 : 0;
+    return new Response(JSON.stringify({ success: true, data, average, count }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+  } catch (error) {
+    console.error('Error fetching service reviews:', error);
+    return new Response(JSON.stringify({ success: false, message: error.message }), { status: 500, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
   }
 }
 
@@ -459,10 +499,14 @@ export async function updateCustomerReview(request, env, reviewId) {
     const vals = [];
     if (body.rating != null) { sets.push('rating = ?'); vals.push(Number(body.rating)); }
     if (body.reviewText != null) { sets.push('review_text = ?'); vals.push(String(body.reviewText)); }
+    if (Array.isArray(body.photos)) {
+      try { await env.KUDDL_DB.prepare("ALTER TABLE customer_reviews ADD COLUMN photos TEXT").run(); } catch { /* exists */ }
+      sets.push('photos = ?'); vals.push(body.photos.length ? JSON.stringify(body.photos.slice(0, 5)) : null);
+    }
     if (!sets.length) {
       return new Response(JSON.stringify({ success: true, message: 'No changes' }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
     }
-    sets.push("updated_at = datetime('now')");
+    // NB: prod customer_reviews has no updated_at column — do not set it.
     await env.KUDDL_DB.prepare(`UPDATE customer_reviews SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, reviewId).run();
     await recomputeProviderRating(env, existing.provider_id);
 

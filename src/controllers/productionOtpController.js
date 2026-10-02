@@ -144,11 +144,11 @@ export async function sendProductionOTP(request, env) {
       // return the OTP in the response instead of sending an SMS). We key off the
       // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
       // can't re-enable the leak on prod.
-      const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
-      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddlkin.co';
-
-      // Check if we're in test mode or if Twilio credentials are missing
-      const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;
+      // Prod (ENVIRONMENT=production) NEVER runs test mode — a stray TWILIO_TEST_MODE
+      // can't re-enable the OTP leak. Host is unreliable here (wrangler dev reports
+      // the route host), so we key solely off ENVIRONMENT.
+      const isProduction = env.ENVIRONMENT === 'production';
+      const isTestMode = !isProduction && env.TWILIO_TEST_MODE === 'true';
       const hasValidCredentials = twilioAccountSid && twilioAuthToken && messagingServiceSid;
 
       // Only expose the OTP in the API response when explicitly running in test
@@ -500,11 +500,11 @@ export async function sendPartnerProductionOTP(request, env) {
       // return the OTP in the response instead of sending an SMS). We key off the
       // real request host as well as ENVIRONMENT so a stray TWILIO_TEST_MODE secret
       // can't re-enable the leak on prod.
-      const host = (() => { try { return new URL(request.url).hostname; } catch { return ''; } })();
-      const isProduction = env.ENVIRONMENT === 'production' || host === 'api.kuddlkin.co';
-
-      // Check if we're in test mode or if Twilio credentials are missing
-      const isTestMode = env.TWILIO_TEST_MODE === 'true' && !isProduction;
+      // Prod (ENVIRONMENT=production) NEVER runs test mode — a stray TWILIO_TEST_MODE
+      // can't re-enable the OTP leak. Host is unreliable here (wrangler dev reports
+      // the route host), so we key solely off ENVIRONMENT.
+      const isProduction = env.ENVIRONMENT === 'production';
+      const isTestMode = !isProduction && env.TWILIO_TEST_MODE === 'true';
       const hasValidCredentials = twilioAccountSid && twilioAuthToken && messagingServiceSid;
 
       // Only expose the OTP in the API response when explicitly running in test

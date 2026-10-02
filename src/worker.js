@@ -326,6 +326,7 @@ router.post('/api/customer/favorites', (request, env) => customerProfileControll
 router.delete('/api/customer/favorites/:id', (request, env, ctx) => customerProfileController.removeFromFavorites(request, env, ctx.params.id));
 router.get('/api/customer/reviews', (request, env) => customerProfileController.getCustomerReviews(request, env));
 router.post('/api/customer/reviews', (request, env) => customerProfileController.createReview(request, env));
+router.get('/api/public/services/:id/reviews', (request, env) => customerProfileController.getPublicServiceReviews(request, env, request.params.id));
 router.put('/api/customer/reviews/:id', (request, env) => customerProfileController.updateCustomerReview(request, env, request.params.id));
 router.delete('/api/customer/reviews/:id', (request, env) => customerProfileController.deleteCustomerReview(request, env, request.params.id));
 router.get('/api/customer/transactions', (request, env) => customerProfileController.getCustomerTransactions(request, env));
@@ -3963,8 +3964,8 @@ router.get('/api/public/services-all', async (request, env) => {
           p.state,
           p.experience_years,
           p.is_active,
-          p.average_rating as provider_rating,
-          p.total_reviews as provider_reviews,
+          rv.avg_r as provider_rating,
+          rv.cnt as provider_reviews,
           p.serviceable_pincodes,
           p.pincode as provider_pincode,
           -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
@@ -3988,6 +3989,14 @@ router.get('/api/public/services-all', async (request, env) => {
           WHERE price > 0 AND status != 'archived'
           GROUP BY parent_id
         ) bp ON bp.parent_id = s.id
+        -- Real provider rating from reviews (providers has no rating column in
+        -- prod), computed once per provider.
+        LEFT JOIN (
+          SELECT provider_id, ROUND(AVG(rating), 1) AS avg_r, COUNT(*) AS cnt
+          FROM customer_reviews
+          WHERE COALESCE(status, 'approved') = 'approved'
+          GROUP BY provider_id
+        ) rv ON rv.provider_id = s.provider_id
         -- Show EXACTLY the services the website shows. The web's per-module
         -- endpoints (/api/{adventure,bloom,care}/services) list only "complete"
         -- listings — i.e. those carrying their structured category pricing (or
@@ -4888,12 +4897,11 @@ router.get('/api/public/services/:id', async (request, env) => {
         p.id as provider_db_id, p.business_name, p.name as provider_name,
         p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status,
         p.experience_years,
-        COALESCE(p.average_rating, 0) as average_rating,
-        COALESCE(p.total_reviews, 0) as review_count
+        COALESCE((SELECT ROUND(AVG(rating), 1) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as average_rating,
+        COALESCE((SELECT COUNT(*) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as review_count
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       WHERE s.id = ? AND p.id IS NOT NULL
-        AND COALESCE(s.partner_approved, 1) = 1
     `).bind(serviceId).first();
 
     // If not found in services, check the camps table.

@@ -155,3 +155,8 @@ local.properties
 
 # CocoaPods
 /ios/Pods/
+
+# Local testing — never commit secrets or prod data dumps
+.dev.vars
+prod-dump.sql
+*.sql.bak
