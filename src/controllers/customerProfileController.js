@@ -406,6 +406,88 @@ export async function createReview(request, env) {
   }
 }
 
+// Resolve all customer/parent ids tied to the signed-in account (duplicate rows
+// share a phone in different formats). Used so review edit/delete match a review
+// stored under any sibling id.
+async function resolveCustomerIds(request, env, customerId) {
+  const ids = new Set([customerId]);
+  try {
+    const authHeader = request.headers.get('Authorization') || '';
+    const decoded = jwt.decode(authHeader.substring(7))?.payload || {};
+    let phone = decoded.phone;
+    if (phone && String(phone).startsWith('g:')) phone = null;
+    if (!phone) {
+      const row = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(customerId).first();
+      if (row) phone = row.phone;
+    }
+    const digits = phone ? phone.replace(/\D/g, '') : '';
+    const phone10 = digits.length > 10 ? digits.slice(-10) : digits;
+    if (phone10) {
+      const pRows = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+        .bind(`%${phone10}`, phone10, phone || '').all();
+      for (const r of (pRows.results || [])) ids.add(r.id);
+    }
+  } catch { /* fall back to the single id */ }
+  return [...ids];
+}
+
+export async function updateCustomerReview(request, env, reviewId) {
+  try {
+    const customerId = await getCustomerIdFromToken(request, env);
+    if (!customerId) {
+      return new Response(JSON.stringify({ success: false, message: 'Unauthorized' }), { status: 401, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    const body = await request.json();
+    const ids = await resolveCustomerIds(request, env, customerId);
+    const ph = ids.map(() => '?').join(',');
+
+    // Only the owner's review can change (scoped to their customer ids).
+    const existing = await env.KUDDL_DB.prepare(`SELECT id, provider_id FROM customer_reviews WHERE id = ? AND customer_id IN (${ph})`)
+      .bind(reviewId, ...ids).first();
+    if (!existing) {
+      return new Response(JSON.stringify({ success: false, message: 'Review not found' }), { status: 404, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+
+    const sets = [];
+    const vals = [];
+    if (body.rating != null) { sets.push('rating = ?'); vals.push(Number(body.rating)); }
+    if (body.reviewText != null) { sets.push('review_text = ?'); vals.push(String(body.reviewText)); }
+    if (!sets.length) {
+      return new Response(JSON.stringify({ success: true, message: 'No changes' }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    sets.push("updated_at = datetime('now')");
+    await env.KUDDL_DB.prepare(`UPDATE customer_reviews SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, reviewId).run();
+    await recomputeProviderRating(env, existing.provider_id);
+
+    return new Response(JSON.stringify({ success: true, message: 'Review updated' }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+  } catch (error) {
+    console.error('Error updating review:', error);
+    return new Response(JSON.stringify({ success: false, message: error.message }), { status: 500, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+  }
+}
+
+export async function deleteCustomerReview(request, env, reviewId) {
+  try {
+    const customerId = await getCustomerIdFromToken(request, env);
+    if (!customerId) {
+      return new Response(JSON.stringify({ success: false, message: 'Unauthorized' }), { status: 401, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    const ids = await resolveCustomerIds(request, env, customerId);
+    const ph = ids.map(() => '?').join(',');
+    const existing = await env.KUDDL_DB.prepare(`SELECT id, provider_id FROM customer_reviews WHERE id = ? AND customer_id IN (${ph})`)
+      .bind(reviewId, ...ids).first();
+    if (!existing) {
+      return new Response(JSON.stringify({ success: false, message: 'Review not found' }), { status: 404, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+    }
+    await env.KUDDL_DB.prepare('DELETE FROM customer_reviews WHERE id = ?').bind(reviewId).run();
+    await recomputeProviderRating(env, existing.provider_id);
+    return new Response(JSON.stringify({ success: true, message: 'Review deleted' }), { status: 200, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+  } catch (error) {
+    console.error('Error deleting review:', error);
+    return new Response(JSON.stringify({ success: false, message: error.message }), { status: 500, headers: addCorsHeaders({ 'Content-Type': 'application/json' }) });
+  }
+}
+
 // ==================== TRANSACTIONS/WALLET ====================
 
 export async function getCustomerTransactions(request, env) {
