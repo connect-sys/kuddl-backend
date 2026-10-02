@@ -130,8 +130,7 @@ export async function getCustomerBookings(request, env) {
              s.name as service_name, 
              s.price as service_price,
              p.business_name as provider_name,
-             p.first_name as provider_first_name,
-             p.last_name as provider_last_name,
+             p.name as provider_display_name,
              p.phone as provider_phone,
              p.city as provider_city
       FROM bookings b
@@ -337,7 +336,7 @@ export async function getCustomerReviews(request, env) {
     const reviews = await env.KUDDL_DB.prepare(`
       SELECT r.*,
              p.business_name as provider_name,
-             p.first_name as provider_first_name,
+             p.name as provider_display_name,
              p.city as provider_city,
              b.service_name
       FROM customer_reviews r
