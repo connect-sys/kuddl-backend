@@ -3963,6 +3963,8 @@ router.get('/api/public/services-all', async (request, env) => {
           p.state,
           p.experience_years,
           p.is_active,
+          p.average_rating as provider_rating,
+          p.total_reviews as provider_reviews,
           p.serviceable_pincodes,
           p.pincode as provider_pincode,
           -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
@@ -4063,7 +4065,10 @@ router.get('/api/public/services-all', async (request, env) => {
           images: parsedImageUrls,
           primary_image_url: service.primary_image_url,
           primaryImage: service.primary_image_url,
-          average_rating: 4.5,
+          // Real provider rating (0 when no reviews yet) — never a fake 4.5.
+          average_rating: Number(service.provider_rating) || 0,
+          review_count: Number(service.provider_reviews) || 0,
+          total_reviews: Number(service.provider_reviews) || 0,
           profile_image_url: service.profile_image_url,
           provider: {
             id: service.provider_id,
@@ -4074,7 +4079,8 @@ router.get('/api/public/services-all', async (request, env) => {
             location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
             city: service.city || 'Available',
             state: service.state || 'Nationwide',
-            average_rating: 4.5,
+            average_rating: Number(service.provider_rating) || 0,
+            total_reviews: Number(service.provider_reviews) || 0,
             experience_years: service.experience_years || 0,
             business_name: service.business_name || ''
           },
@@ -4881,7 +4887,9 @@ router.get('/api/public/services/:id', async (request, env) => {
         s.image_urls, s.primary_image_url,
         p.id as provider_db_id, p.business_name, p.name as provider_name,
         p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status,
-        p.experience_years, COALESCE(p.rating, 0) as average_rating
+        p.experience_years,
+        COALESCE(p.average_rating, 0) as average_rating,
+        COALESCE(p.total_reviews, 0) as review_count
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       WHERE s.id = ? AND p.id IS NOT NULL
@@ -4999,9 +5007,13 @@ router.get('/api/public/services/:id', async (request, env) => {
         // Real values ONLY — no fake 4.5★ / 3 years (Customer Spec §01 r4).
         // Null when there is nothing real; the UI hides these entirely.
         average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : null,
+        total_reviews: Number(service.review_count) || 0,
         experience_years: Number(service.experience_years) > 0 ? Number(service.experience_years) : null,
         business_name: service.business_name
       },
+      // Top-level rating too, so the detail page reads it directly.
+      average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : 0,
+      review_count: Number(service.review_count) || 0,
       createdAt: service.created_at
     };
 
