@@ -3962,7 +3962,10 @@ router.get('/api/public/services-all', async (request, env) => {
           p.pincode as provider_pincode,
           -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
           -- the cheapest batch price so the card can show a real price, not 'Free'.
-          (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived') AS min_batch_price,
+          -- Sourced from the grouped `bp` join below (computed once) instead of a
+          -- per-row correlated subquery, which multiplied D1 row reads and timed
+          -- out at larger limits (made the whole endpoint return empty).
+          bp.min_batch_price,
           CASE
             WHEN ? != '' AND (s.available_pincodes LIKE '%' || ? || '%' OR p.serviceable_pincodes LIKE '%' || ? || '%' OR p.pincode = ?) THEN 1
             WHEN ? != '' AND p.city IN (SELECT city FROM pincodes WHERE pincode = ?) THEN 2
@@ -3971,6 +3974,13 @@ router.get('/api/public/services-all', async (request, env) => {
         FROM services s
         LEFT JOIN providers p ON s.provider_id = p.id
         LEFT JOIN categories c ON s.category_id = c.id
+        -- Cheapest live batch price per service, computed once (not per row).
+        LEFT JOIN (
+          SELECT parent_id, MIN(price) AS min_batch_price
+          FROM batches
+          WHERE price > 0 AND status != 'archived'
+          GROUP BY parent_id
+        ) bp ON bp.parent_id = s.id
         -- Show EXACTLY the services the website shows. The web's per-module
         -- endpoints (/api/{adventure,bloom,care}/services) list only "complete"
         -- listings — i.e. those carrying their structured category pricing (or
@@ -3986,7 +3996,7 @@ router.get('/api/public/services-all', async (request, env) => {
             -- the Bloom form, so its price lives on the batches, not services.price).
             -- An Adventure/Care service with a stray batch stays hidden.
             OR ((LOWER(s.category_id) LIKE '%bloom%' OR LOWER(s.category_id) LIKE '%discover%')
-                AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id AND b.price > 0 AND b.status != 'archived'))
+                AND bp.min_batch_price IS NOT NULL)
             -- Legacy Discover services stored a flat price on the service row.
             OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
           )

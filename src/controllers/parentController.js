@@ -757,8 +757,29 @@ export async function updateParentChild(request, env, childId) {
     if (!isValid) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
     }
-    const parentId = jwt.decode(token).payload.id;
+    const decoded = jwt.decode(token).payload || {};
+    const tokenId = decoded.id;
     const body = await request.json();
+
+    // Resolve all parent ids for this phone (duplicate rows share a phone in
+    // different formats), so an edit isn't rejected when the child lives under a
+    // sibling parent row — mirrors getParentChildren / deleteParentChild.
+    let uPhone = decoded.phone;
+    if (uPhone && String(uPhone).startsWith('g:')) uPhone = null;
+    if (!uPhone && tokenId) {
+      const row = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(tokenId).first();
+      if (row) uPhone = row.phone;
+    }
+    const uDigits = uPhone ? uPhone.replace(/\D/g, '') : '';
+    const uPhone10 = uDigits.length > 10 ? uDigits.slice(-10) : uDigits;
+    const idSet = new Set();
+    if (tokenId) idSet.add(tokenId);
+    if (uPhone10) {
+      const pRows = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+        .bind(`%${uPhone10}`, uPhone10, uPhone || '').all();
+      for (const r of (pRows.results || [])) idSet.add(r.id);
+    }
+    const parentIds = [...idSet];
 
     const updates = {};
     const name = body.name || body.fullname;
@@ -778,9 +799,10 @@ export async function updateParentChild(request, env, childId) {
     }
 
     const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-    const values = [...Object.values(updates), new Date().toISOString(), childId, parentId];
+    const ph = (parentIds.length ? parentIds : [tokenId]).map(() => '?').join(',');
+    const values = [...Object.values(updates), new Date().toISOString(), childId, ...(parentIds.length ? parentIds : [tokenId])];
     const result = await env.KUDDL_DB.prepare(
-      `UPDATE children SET ${setClause}, updated_at = ? WHERE id = ? AND parent_id = ?`
+      `UPDATE children SET ${setClause}, updated_at = ? WHERE id = ? AND parent_id IN (${ph})`
     ).bind(...values).run();
 
     const changed = result?.meta?.changes ?? result?.changes ?? 0;
@@ -805,14 +827,54 @@ export async function deleteParentChild(request, env, childId) {
     if (!isValid) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
     }
-    const parentId = jwt.decode(token).payload.id;
+    const decoded = jwt.decode(token).payload || {};
+    const tokenId = decoded.id;
     if (!childId) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    const result = await env.KUDDL_DB.prepare('DELETE FROM children WHERE id = ? AND parent_id = ?')
-      .bind(childId, parentId).run();
-    const changed = result?.meta?.changes ?? result?.changes ?? 0;
+    // Resolve ALL parent/customer ids for this phone, exactly like
+    // getParentChildren — a child may live under a duplicate parent row (same
+    // phone stored in a different format), so an exact token-id match would 404
+    // and the UI delete would appear to do nothing.
+    let phone = decoded.phone;
+    if (phone && String(phone).startsWith('g:')) phone = null;
+    if (!phone && tokenId) {
+      const row = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(tokenId).first();
+      if (row) phone = row.phone;
+    }
+    const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
+    const phone10 = phoneDigits.length > 10 ? phoneDigits.slice(-10) : phoneDigits;
+
+    const ids = new Set();
+    if (tokenId) ids.add(tokenId);
+    if (phone10) {
+      const pRows = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+        .bind(`%${phone10}`, phone10, phone || '').all();
+      for (const r of (pRows.results || [])) ids.add(r.id);
+      try {
+        const uRows = await env.KUDDL_DB.prepare('SELECT id FROM users WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+          .bind(`%${phone10}`, phone10, phone || '').all();
+        for (const r of (uRows.results || [])) ids.add(r.id);
+      } catch { /* users table optional */ }
+    }
+    const idList = [...ids];
+    if (!idList.length) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Parent not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const ph = idList.map(() => '?').join(',');
+
+    const nativeRes = await env.KUDDL_DB.prepare(`DELETE FROM children WHERE id = ? AND parent_id IN (${ph})`)
+      .bind(childId, ...idList).run();
+    let changed = nativeRes?.meta?.changes ?? nativeRes?.changes ?? 0;
+    if (!changed) {
+      // Fall back to the web customer_children table.
+      try {
+        const webRes = await env.KUDDL_DB.prepare(`DELETE FROM customer_children WHERE id = ? AND customer_id IN (${ph})`)
+          .bind(childId, ...idList).run();
+        changed = webRes?.meta?.changes ?? webRes?.changes ?? 0;
+      } catch { /* table optional */ }
+    }
     if (!changed) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Child not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
     }
