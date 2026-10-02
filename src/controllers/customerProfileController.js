@@ -338,10 +338,11 @@ export async function getCustomerReviews(request, env) {
              p.business_name as provider_name,
              p.name as provider_display_name,
              p.city as provider_city,
-             b.service_name
+             s.name as service_name
       FROM customer_reviews r
       LEFT JOIN providers p ON r.provider_id = p.id
       LEFT JOIN bookings b ON r.booking_id = b.id
+      LEFT JOIN services s ON s.id = b.service_id
       WHERE r.customer_id IN (${ph})
       ORDER BY r.created_at DESC
     `).bind(...idList).all();
