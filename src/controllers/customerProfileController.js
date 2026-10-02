@@ -305,8 +305,37 @@ export async function getCustomerReviews(request, env) {
       });
     }
 
+    // Resolve ALL ids for this account (duplicate parent rows share a phone in
+    // different formats), so a review stored under a sibling row still shows —
+    // mirrors getParentChildren / getParentBookings.
+    const ids = new Set([customerId]);
+    try {
+      const authHeader = request.headers.get('Authorization') || '';
+      const decoded = jwt.decode(authHeader.substring(7))?.payload || {};
+      let phone = decoded.phone;
+      if (phone && String(phone).startsWith('g:')) phone = null;
+      if (!phone) {
+        const row = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(customerId).first();
+        if (row) phone = row.phone;
+      }
+      const digits = phone ? phone.replace(/\D/g, '') : '';
+      const phone10 = digits.length > 10 ? digits.slice(-10) : digits;
+      if (phone10) {
+        const pRows = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+          .bind(`%${phone10}`, phone10, phone || '').all();
+        for (const r of (pRows.results || [])) ids.add(r.id);
+        try {
+          const uRows = await env.KUDDL_DB.prepare('SELECT id FROM users WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+            .bind(`%${phone10}`, phone10, phone || '').all();
+          for (const r of (uRows.results || [])) ids.add(r.id);
+        } catch { /* users table optional */ }
+      }
+    } catch { /* fall back to the single customerId */ }
+
+    const idList = [...ids];
+    const ph = idList.map(() => '?').join(',');
     const reviews = await env.KUDDL_DB.prepare(`
-      SELECT r.*, 
+      SELECT r.*,
              p.business_name as provider_name,
              p.first_name as provider_first_name,
              p.city as provider_city,
@@ -314,9 +343,9 @@ export async function getCustomerReviews(request, env) {
       FROM customer_reviews r
       LEFT JOIN providers p ON r.provider_id = p.id
       LEFT JOIN bookings b ON r.booking_id = b.id
-      WHERE r.customer_id = ?
+      WHERE r.customer_id IN (${ph})
       ORDER BY r.created_at DESC
-    `).bind(customerId).all();
+    `).bind(...idList).all();
 
     return new Response(JSON.stringify({
       success: true,
