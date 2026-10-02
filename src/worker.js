@@ -6809,6 +6809,11 @@ router.post('/api/bookings/:id/cancel', async (request, env) => {
   return bookingController.cancelBooking(request, env);
 });
 
+// Parent-initiated reschedule (change booking date).
+router.put('/api/bookings/:id', async (request, env) => {
+  return bookingController.rescheduleBooking(request, env);
+});
+
 router.post('/api/bookings/:id/complete', async (request, env) => {
   return bookingController.completeBooking(request, env);
 });

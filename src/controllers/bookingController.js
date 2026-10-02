@@ -1270,99 +1270,139 @@ export async function rejectBooking(request, env) {
 }
 
 // Cancel booking
+// Resolve the viewer's parent-id set (and provider id) from the bearer token.
+// Mirrors getParentBookings: a person can have several `parents` rows (duplicate
+// phone formats, Google-vs-OTP identities), so a booking's parent_id may be any
+// of them. Returns { ids, phone10, email, tokenId }.
+async function resolveBookingViewerIds(request, env) {
+  let tokenId = null, tokenPhone = null, tokenEmail = null;
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.decode(authHeader.substring(7));
+      if (decoded && decoded.payload) {
+        tokenId = decoded.payload.id;
+        tokenPhone = decoded.payload.phone;
+        tokenEmail = decoded.payload.email || null;
+      }
+    } catch { /* ignore */ }
+  }
+  let phone = tokenPhone;
+  if (!phone && tokenId) {
+    const row = await env.KUDDL_DB.prepare('SELECT phone FROM parents WHERE id = ?').bind(tokenId).first();
+    if (row) phone = row.phone;
+  }
+  const digits = phone ? phone.replace(/\D/g, '') : '';
+  const phone10 = digits.length > 10 ? digits.slice(-10) : digits;
+  const ids = new Set();
+  if (tokenId) ids.add(tokenId);
+  if (phone10) {
+    const rows = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE phone LIKE ? OR phone LIKE ? OR phone = ?')
+      .bind(`%${phone10}`, phone10, phone || '').all();
+    for (const r of (rows.results || [])) ids.add(r.id);
+  }
+  let email = tokenEmail;
+  if (!email && ids.size) {
+    const ph = [...ids].map(() => '?').join(',');
+    const er = await env.KUDDL_DB.prepare(`SELECT email FROM parents WHERE id IN (${ph}) AND email IS NOT NULL AND email != '' LIMIT 1`).bind(...ids).first();
+    if (er && er.email) email = er.email;
+  }
+  if (email) {
+    const er = await env.KUDDL_DB.prepare('SELECT id FROM parents WHERE LOWER(email) = LOWER(?)').bind(email).all();
+    for (const r of (er.results || [])) ids.add(r.id);
+  }
+  return { ids: [...ids], phone10, email, tokenId };
+}
+
+// Find a booking that belongs to the viewer (by any of their parent ids, or the
+// provider id, or a phone/email captured on the booking itself).
+async function findViewerBooking(env, bookingId, viewer) {
+  const { ids, phone10, email, tokenId } = viewer;
+  const idSet = ids.length ? ids : (tokenId ? [tokenId] : []);
+  const ph = idSet.map(() => '?').join(',') || "''";
+  const clauses = [`b.parent_id IN (${ph})`];
+  const binds = [...idSet];
+  if (tokenId) { clauses.push('b.provider_id = ?'); binds.push(tokenId); }
+  if (phone10) { clauses.push('b.special_requests LIKE ?'); binds.push(`%${phone10}%`); }
+  if (email) { clauses.push('LOWER(b.special_requests) LIKE ?'); binds.push(`%${email.toLowerCase()}%`); }
+  return env.KUDDL_DB.prepare(`SELECT b.* FROM bookings b WHERE b.id = ? AND (${clauses.join(' OR ')})`).bind(bookingId, ...binds).first();
+}
+
 export async function cancelBooking(request, env) {
   try {
-    const user = request.user; // From auth middleware
     const url = new URL(request.url);
     const bookingId = url.pathname.split('/')[3]; // /api/bookings/{id}/cancel
-    const { reason } = await request.json();
+    let reason = 'Cancelled';
+    try { const body = await request.json(); reason = body?.reason || reason; } catch { /* no body */ }
 
-    // Check if booking exists and user has permission
-    const booking = await env.KUDDL_DB.prepare(`
-      SELECT * FROM bookings 
-      WHERE id = ? AND (parent_id = ? OR provider_id = ?) 
-      AND status IN ('pending', 'confirmed')
-    `).bind(bookingId, user.id, user.id).first();
+    const viewer = await resolveBookingViewerIds(request, env);
+    if (!viewer.ids.length && !viewer.tokenId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authentication required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
 
+    const booking = await findViewerBooking(env, bookingId, viewer);
     if (!booking) {
-      return addCorsHeaders(new Response(JSON.stringify({
-        success: false,
-        message: 'Booking not found or cannot be cancelled'
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      }));
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Booking not found or cannot be cancelled' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+    if (String(booking.status).toLowerCase() === 'cancelled') {
+      return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Booking already cancelled' }), { headers: { 'Content-Type': 'application/json' } }));
     }
 
-    const cancelledBy = booking.parent_id === user.id ? 'customer' : 'provider';
-    const notifyUserId = booking.parent_id === user.id ? booking.provider_id : booking.parent_id;
-
-    // Update booking status
-    await env.KUDDL_DB.prepare(`
-      UPDATE bookings 
-      SET status = 'cancelled', cancellation_reason = ?, cancelled_by = ?, cancelled_at = ?, updated_at = ?
-      WHERE id = ?
-    `).bind(reason || 'Cancelled', cancelledBy, new Date().toISOString(), new Date().toISOString(), bookingId).run();
-
-    // If cancelled by customer and payment was made, create refund request
-    if (cancelledBy === 'customer' && booking.payment_status === 'paid') {
-      const refundId = generateId();
-      const refundAmount = booking.total_amount;
-      
-      // Create refund request
-      await env.KUDDL_DB.prepare(`
-        INSERT INTO refund_requests (
-          id, booking_id, parent_id, amount, reason, status, 
-          requested_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-      `).bind(
-        refundId, bookingId, booking.parent_id, refundAmount, 
-        reason || 'Booking cancelled by customer',
-        new Date().toISOString(), new Date().toISOString(), new Date().toISOString()
-      ).run();
-
-      // Notify admin about refund request
-      const adminNotificationId = generateId();
-      await env.KUDDL_DB.prepare(`
-        INSERT INTO notifications (id, user_id, user_type, type, title, message, data, created_at)
-        VALUES (?, 'admin', 'admin', 'refund_request', 'New Refund Request', ?, ?, ?)
-      `).bind(
-        adminNotificationId,
-        `Refund request for booking #${bookingId}. Amount: ₹${refundAmount}. Reason: ${reason || 'Booking cancelled by customer'}`,
-        JSON.stringify({ bookingId, refundId, amount: refundAmount }),
-        new Date().toISOString()
-      ).run();
+    // Only touch columns known to exist in prod (status, updated_at). A reason
+    // column is added best-effort so we can record it without failing the cancel.
+    try { await env.KUDDL_DB.prepare('ALTER TABLE bookings ADD COLUMN cancellation_reason TEXT').run(); } catch { /* exists */ }
+    try {
+      await env.KUDDL_DB.prepare('UPDATE bookings SET status = ?, cancellation_reason = ?, updated_at = ? WHERE id = ?')
+        .bind('cancelled', reason, new Date().toISOString(), bookingId).run();
+    } catch {
+      // Fall back to the guaranteed columns only.
+      await env.KUDDL_DB.prepare('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?')
+        .bind('cancelled', new Date().toISOString(), bookingId).run();
     }
 
-    // Create notification for the other party
-    const notificationId = generateId();
-    await env.KUDDL_DB.prepare(`
-      INSERT INTO notifications (id, user_id, type, title, message, data, created_at)
-      VALUES (?, ?, 'booking', 'Booking Cancelled', ?, ?, ?)
-    `).bind(
-      notificationId, notifyUserId,
-      `A booking has been cancelled. Reason: ${reason || 'No reason provided'}`,
-      JSON.stringify({ bookingId }),
-      new Date().toISOString()
-    ).run();
+    // Best-effort refund request (never fail the cancel if the table is absent).
+    if (String(booking.payment_status).toLowerCase() === 'paid' && Number(booking.total_amount) > 0) {
+      try {
+        await env.KUDDL_DB.prepare(`INSERT INTO refund_requests (id, booking_id, parent_id, amount, reason, status, requested_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
+          .bind(generateId(), bookingId, booking.parent_id, booking.total_amount, reason, new Date().toISOString(), new Date().toISOString(), new Date().toISOString()).run();
+      } catch (e) { console.warn('refund request insert skipped:', e?.message); }
+    }
 
-    return addCorsHeaders(new Response(JSON.stringify({
-      success: true,
-      message: 'Booking cancelled successfully',
-      refundRequested: cancelledBy === 'customer' && booking.payment_status === 'paid'
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    }));
-
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Booking cancelled successfully' }), { headers: { 'Content-Type': 'application/json' } }));
   } catch (error) {
     console.error('Cancel booking error:', error);
-    return addCorsHeaders(new Response(JSON.stringify({
-      success: false,
-      message: 'Internal server error'
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    }));
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: error.message || 'Internal server error' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+// Reschedule: change a booking's date (parent-initiated). PUT /api/bookings/:id
+export async function rescheduleBooking(request, env) {
+  try {
+    const url = new URL(request.url);
+    const bookingId = url.pathname.split('/')[3]; // /api/bookings/{id}
+    const body = await request.json().catch(() => ({}));
+    const newDate = body?.bookingDate || body?.booking_date || body?.date;
+    if (!newDate) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'bookingDate is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const viewer = await resolveBookingViewerIds(request, env);
+    if (!viewer.ids.length && !viewer.tokenId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Authentication required' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const booking = await findViewerBooking(env, bookingId, viewer);
+    if (!booking) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Booking not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    await env.KUDDL_DB.prepare('UPDATE bookings SET booking_date = ?, updated_at = ? WHERE id = ?')
+      .bind(newDate, new Date().toISOString(), bookingId).run();
+
+    return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Booking rescheduled', bookingDate: newDate }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('Reschedule booking error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: error.message || 'Internal server error' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 }
 
