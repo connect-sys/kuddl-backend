@@ -3962,7 +3962,7 @@ router.get('/api/public/services-all', async (request, env) => {
           p.pincode as provider_pincode,
           -- Bloom v3 keeps the price on the batches (services.price is 0) — expose
           -- the cheapest batch price so the card can show a real price, not 'Free'.
-          -- Sourced from the grouped `bp` join below (computed once) instead of a
+          -- Sourced from the grouped bp join below (computed once) instead of a
           -- per-row correlated subquery, which multiplied D1 row reads and timed
           -- out at larger limits (made the whole endpoint return empty).
           bp.min_batch_price,
