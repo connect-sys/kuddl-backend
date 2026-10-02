@@ -338,7 +338,9 @@ export async function getCustomerReviews(request, env) {
              p.business_name as provider_name,
              p.name as provider_display_name,
              p.city as provider_city,
-             s.name as service_name
+             p.profile_picture as provider_image,
+             s.name as service_name,
+             s.primary_image_url as service_image
       FROM customer_reviews r
       LEFT JOIN providers p ON r.provider_id = p.id
       LEFT JOIN bookings b ON r.booking_id = b.id
@@ -373,17 +375,22 @@ export async function createReview(request, env) {
       });
     }
 
-    const { providerId, bookingId, rating, reviewText } = await request.json();
+    const { providerId, bookingId, rating, reviewText, photos } = await request.json();
 
     // Care partner reviews are HELD for approval before they publish or count
     // (§07.4 / Screen G rule 4). Everyone else auto-approves.
     const careProvider = await isCareProvider(env, providerId);
     const reviewStatus = careProvider ? 'pending' : 'approved';
 
+    // Parent-uploaded photos (array of URLs) stored as JSON. Ensure the column
+    // exists first (older prod tables predate it).
+    try { await env.KUDDL_DB.prepare("ALTER TABLE customer_reviews ADD COLUMN photos TEXT").run(); } catch { /* already exists */ }
+    const photosJson = Array.isArray(photos) && photos.length ? JSON.stringify(photos.slice(0, 5)) : null;
+
     const reviewId = generateId();
     await env.KUDDL_DB.prepare(
-      'INSERT INTO customer_reviews (id, customer_id, provider_id, booking_id, rating, review_text, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(reviewId, customerId, providerId, bookingId, rating, reviewText, reviewStatus).run();
+      'INSERT INTO customer_reviews (id, customer_id, provider_id, booking_id, rating, review_text, status, photos) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(reviewId, customerId, providerId, bookingId, rating, reviewText, reviewStatus, photosJson).run();
 
     // Recompute the average from APPROVED reviews only (a held Care review does
     // not move the rating until an admin approves it).
