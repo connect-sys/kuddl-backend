@@ -14,12 +14,21 @@ export const corsHeaders = {
   'Expires': '0',
 };
 
-// Utility function to add CORS headers to responses
+// Utility function to add CORS headers to responses.
+// Accepts either a Response (sets headers on it) OR a plain headers object
+// (returns a merged headers object). Several controllers call it as
+// `headers: addCorsHeaders({ 'Content-Type': 'application/json' })` — without the
+// object branch that crashes with "Cannot read properties of undefined
+// (reading 'set')" because a plain object has no `.headers`.
 export function addCorsHeaders(response) {
-  Object.entries(corsHeaders).forEach(([key, value]) => {
-    response.headers.set(key, value);
-  });
-  return response;
+  if (response && response.headers && typeof response.headers.set === 'function') {
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    return response;
+  }
+  // Plain headers object (or undefined): merge CORS headers in, caller's win.
+  return { ...corsHeaders, ...(response || {}) };
 }
 
 // Handle CORS preflight requests
