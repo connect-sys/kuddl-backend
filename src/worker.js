@@ -6835,6 +6835,12 @@ router.get('/api/payments/status/:bookingId', async (request, env) => {
   return paymentController.getPaymentStatus(request, env);
 });
 
+// Real enabled payment methods + bank/wallet list for the custom checkout UI.
+// Uses the Razorpay secret server-side (never exposed to the browser).
+router.get('/api/payments/methods', async (request, env) => {
+  return paymentController.getPaymentMethods(request, env);
+});
+
 // Dashboard Routes
 router.get('/api/dashboard/partner/stats', async (request, env) => {
   return dashboardController.getPartnerDashboardStats(request, env);

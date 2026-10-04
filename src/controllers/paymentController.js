@@ -127,6 +127,76 @@ export async function createPaymentOrder(request, env) {
   }
 }
 
+// Get the account's REAL enabled payment methods + full netbanking/wallet lists
+// from Razorpay, so the custom checkout UI mirrors what the hosted popup offers.
+// Razorpay's Methods API requires key_id:key_secret Basic Auth, so it MUST run
+// here on the server — the secret is never sent to the browser.
+export async function getPaymentMethods(request, env) {
+  try {
+    const keyId = env.RAZORPAY_KEY_ID;
+    const keySecret = env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: 'Razorpay credentials not configured'
+      }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const auth = btoa(`${keyId}:${keySecret}`);
+    const resp = await fetch(`https://api.razorpay.com/v1/methods?key_id=${encodeURIComponent(keyId)}`, {
+      headers: { 'Authorization': `Basic ${auth}` }
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      return addCorsHeaders(new Response(JSON.stringify({
+        success: false,
+        message: err.error?.description || 'Failed to fetch payment methods'
+      }), { status: 502, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const m = await resp.json();
+
+    // Normalize into a stable shape the frontend can render directly.
+    // netbanking → [{ code, name }]; wallet → [code]; booleans for the rest.
+    const netbanking = m.netbanking && typeof m.netbanking === 'object'
+      ? Object.entries(m.netbanking).map(([code, name]) => ({ code, name: String(name) }))
+      : [];
+    const wallet = m.wallet && typeof m.wallet === 'object'
+      ? Object.entries(m.wallet).filter(([, on]) => !!on).map(([code]) => code)
+      : (Array.isArray(m.wallet) ? m.wallet : []);
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      key: keyId,
+      methods: {
+        upi: !!m.upi,
+        card: !!m.card,
+        credit_card: !!m.credit_card,
+        debit_card: !!m.debit_card,
+        netbanking,
+        wallet,
+        emi: !!m.emi,
+        paylater: m.paylater && typeof m.paylater === 'object'
+          ? Object.entries(m.paylater).filter(([, on]) => !!on).map(([code]) => code)
+          : [],
+      }
+    }), {
+      headers: {
+        'Content-Type': 'application/json',
+        // Methods rarely change — let the browser/CDN cache briefly.
+        'Cache-Control': 'public, max-age=300'
+      }
+    }));
+  } catch (error) {
+    console.error('Get payment methods error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: false,
+      message: 'Internal server error: ' + error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 // Helper to verify Razorpay signature
 async function verifyRazorpaySignature(orderId, paymentId, signature, secret) {
   const text = `${orderId}|${paymentId}`;
