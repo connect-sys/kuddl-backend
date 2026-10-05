@@ -3915,7 +3915,10 @@ router.get('/api/public/services-all', async (request, env) => {
     const url = new URL(request.url);
     const pincode = url.searchParams.get('pincode');
     const category = url.searchParams.get('category');
-    const limit = parseInt(url.searchParams.get('limit')) || 50;
+    // Default raised 50 → 500 so the full catalogue returns even when a client
+    // omits/strips the limit param (e.g. a native WebView HTTP layer), which was
+    // silently capping the apps/site at 50 services.
+    const limit = parseInt(url.searchParams.get('limit')) || 500;
 
     console.log('🔍 [Services-All] Fetching services with lenient filtering');
     console.log('🔍 [Services-All] Pincode:', pincode);
