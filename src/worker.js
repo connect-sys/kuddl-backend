@@ -3919,6 +3919,9 @@ router.get('/api/public/services-all', async (request, env) => {
     // omits/strips the limit param (e.g. a native WebView HTTP layer), which was
     // silently capping the apps/site at 50 services.
     const limit = parseInt(url.searchParams.get('limit')) || 500;
+    // Pagination: clients can page through with offset (e.g. 50 at a time) so the
+    // whole catalogue isn't loaded in one request.
+    const offset = parseInt(url.searchParams.get('offset')) || 0;
 
     console.log('🔍 [Services-All] Fetching services with lenient filtering');
     console.log('🔍 [Services-All] Pincode:', pincode);
@@ -4033,8 +4036,8 @@ router.get('/api/public/services-all', async (request, env) => {
         params.push(category);
       }
 
-      query += ` ORDER BY location_priority ASC, s.created_at DESC LIMIT ?`;
-      params.push(limit);
+      query += ` ORDER BY location_priority ASC, s.created_at DESC LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
 
       console.log('🔍 [Services-All] QUERY:', query);
       console.log('🔍 [Services-All] PARAMS:', params);
