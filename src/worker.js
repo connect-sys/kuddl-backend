@@ -3956,6 +3956,7 @@ router.get('/api/public/services-all', async (request, env) => {
           s.price,
           s.duration_minutes,
           s.features,
+          s.tags,
           s.available_pincodes,
           s.image_urls,
           s.primary_image_url,
@@ -4895,7 +4896,7 @@ router.get('/api/public/services/:id', async (request, env) => {
     const service = await env.KUDDL_DB.prepare(`
       SELECT
         s.id, s.name, s.description, s.short_description, s.category_id, s.subcategory_id,
-        s.price_type, s.price, s.duration_minutes, s.features,
+        s.price_type, s.price, s.duration_minutes, s.features, s.tags,
         s.age_group, s.special_requirements, s.cancellation_policy,
         s.bloom_pricing, s.adventure_pricing, s.care_pricing,
         s.available_pincodes, s.created_at, s.provider_id, s.status,
