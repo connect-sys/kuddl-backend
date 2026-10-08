@@ -1059,6 +1059,7 @@ export async function getPublicServices(request, env) {
           (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price,
           s.duration_minutes,
           s.features,
+          s.tags,
           s.available_pincodes,
           s.image_urls,
           s.primary_image_url,
@@ -1171,6 +1172,9 @@ export async function getPublicServices(request, env) {
           duration: service.duration_minutes,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : {},
+          // Partner-added free-text tags (JSON array) so cards show the real
+          // chips, not just derived fallbacks (bug 1).
+          tags: service.tags ? (typeof service.tags === 'string' ? (() => { try { return JSON.parse(service.tags); } catch { return []; } })() : service.tags) : [],
           // Customer-facing extras extracted from features (display-only).
           ...extractServiceExtras(service.features),
           availablePincodes: service.available_pincodes ? (typeof service.available_pincodes === 'string' ? JSON.parse(service.available_pincodes) : service.available_pincodes) : [],

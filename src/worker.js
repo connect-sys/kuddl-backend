@@ -5026,6 +5026,9 @@ router.get('/api/public/services/:id', async (request, env) => {
         experience_years: Number(service.experience_years) > 0 ? Number(service.experience_years) : null,
         business_name: service.business_name
       },
+      // Partner-added free-text tags (stored as a JSON array). Were queried but
+      // never returned, so the detail page could never render them (bug 1).
+      tags: service.tags ? safeJsonParse(service.tags, []) : [],
       // Top-level rating too, so the detail page reads it directly.
       average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : 0,
       review_count: Number(service.review_count) || 0,
