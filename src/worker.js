@@ -4903,7 +4903,7 @@ router.get('/api/public/services/:id', async (request, env) => {
         s.image_urls, s.primary_image_url,
         p.id as provider_db_id, p.business_name, p.name as provider_name,
         p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status,
-        p.experience_years,
+        p.experience_years, p.latitude, p.longitude,
         COALESCE((SELECT ROUND(AVG(rating), 1) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as average_rating,
         COALESCE((SELECT COUNT(*) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as review_count
       FROM services s
@@ -5019,6 +5019,8 @@ router.get('/api/public/services/:id', async (request, env) => {
         location: [service.city, service.state].filter(Boolean).join(', '),
         city: service.city,
         state: service.state,
+        latitude: service.latitude ?? null,
+        longitude: service.longitude ?? null,
         // Real values ONLY — no fake 4.5★ / 3 years (Customer Spec §01 r4).
         // Null when there is nothing real; the UI hides these entirely.
         average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : null,

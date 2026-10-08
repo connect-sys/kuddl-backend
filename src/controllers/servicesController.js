@@ -1073,6 +1073,8 @@ export async function getPublicServices(request, env) {
           p.state,
           p.address,
           p.pincode,
+          p.latitude,
+          p.longitude,
           p.experience_years
         FROM services s
         LEFT JOIN categories c ON s.category_id = c.id
@@ -1191,6 +1193,10 @@ export async function getPublicServices(request, env) {
           profile_image_url: service.profile_image_url,
           city: service.city,
           state: service.state,
+          // Real venue coordinates (when the partner pinned a location) so the
+          // map can place markers accurately instead of approximating (bug 15).
+          latitude: service.latitude ?? null,
+          longitude: service.longitude ?? null,
           experience_years: service.experience_years,
           provider: {
             id: service.provider_id,
@@ -1198,11 +1204,15 @@ export async function getPublicServices(request, env) {
             businessName: service.business_name,
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
-            location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
-            city: service.city || 'Available',
-            state: service.state || 'Nationwide',
+            // Blank when the provider has no address — never the fabricated
+            // "Available Nationwide" placeholder that leaked onto cards/maps (bugs 9 & 16).
+            location: service.city && service.state ? `${service.city}, ${service.state}` : '',
+            city: service.city || '',
+            state: service.state || '',
             address: service.address,
             pincode: service.pincode,
+            latitude: service.latitude ?? null,
+            longitude: service.longitude ?? null,
             average_rating: 4.5, // Default rating since column doesn't exist
             experience_years: service.experience_years || 0,
             business_name: service.business_name || 'Service Provider',
