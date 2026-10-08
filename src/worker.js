@@ -4045,7 +4045,11 @@ router.get('/api/public/services-all', async (request, env) => {
         // forms, plus the module, so mis-tagged services (category_id='bloom',
         // null module) still appear under their real category filter.
         const shortCat = category.replace(/^cat_/, '');
-        query += ` AND (s.category_id = ? OR s.category_id = ? OR UPPER(COALESCE(s.category_module,'')) = ?)`;
+        // NOTE: category_module is the JOINed categories.module (aliased c.module
+        // in the SELECT), NOT a services column. Referencing s.category_module
+        // threw "no such column" for every category filter, which the catch
+        // swallowed as an empty list — so category filters returned 0 results.
+        query += ` AND (s.category_id = ? OR s.category_id = ? OR UPPER(COALESCE(c.module,'')) = ?)`;
         params.push(category, shortCat, shortCat.toUpperCase());
       }
 
