@@ -3969,6 +3969,8 @@ router.get('/api/public/services-all', async (request, env) => {
           p.profile_picture as profile_image_url,
           p.city,
           p.state,
+          p.latitude,
+          p.longitude,
           p.experience_years,
           p.is_active,
           rv.avg_r as provider_rating,
@@ -4033,8 +4035,12 @@ router.get('/api/public/services-all', async (request, env) => {
       params.push(pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam, pincodeParam);
 
       if (category) {
-        query += ` AND s.category_id = ?`;
-        params.push(category);
+        // Match both the canonical 'cat_bloom' and the legacy/orphan 'bloom'
+        // forms, plus the module, so mis-tagged services (category_id='bloom',
+        // null module) still appear under their real category filter.
+        const shortCat = category.replace(/^cat_/, '');
+        query += ` AND (s.category_id = ? OR s.category_id = ? OR UPPER(COALESCE(s.category_module,'')) = ?)`;
+        params.push(category, shortCat, shortCat.toUpperCase());
       }
 
       query += ` ORDER BY location_priority ASC, s.created_at DESC LIMIT ? OFFSET ?`;
@@ -4092,9 +4098,13 @@ router.get('/api/public/services-all', async (request, env) => {
             name: service.provider_name || '',
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
-            location: service.city && service.state ? `${service.city}, ${service.state}` : 'Available Nationwide',
-            city: service.city || 'Available',
-            state: service.state || 'Nationwide',
+            // No placeholder location — blank when the provider has no city/state.
+            location: [service.city, service.state].filter(Boolean).join(', '),
+            city: service.city || '',
+            state: service.state || '',
+            // Real venue coordinates only (null when the provider hasn't set them).
+            latitude: (service.latitude ?? null) === null ? null : Number(service.latitude),
+            longitude: (service.longitude ?? null) === null ? null : Number(service.longitude),
             average_rating: Number(service.provider_rating) || 0,
             total_reviews: Number(service.provider_reviews) || 0,
             experience_years: service.experience_years || 0,
