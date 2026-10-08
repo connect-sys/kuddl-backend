@@ -4013,7 +4013,13 @@ router.get('/api/public/services-all', async (request, env) => {
         -- no pricing (e.g. an Adventure service with no adventure_pricing) is
         -- flagged incomplete and hidden on web, so we hide it here too. No
         -- partner_approved / is_active gate — the web applies neither.
-        WHERE s.status = 'active'
+        -- Care services pending specialist verification stay in 'submitted'; we
+        -- surface them too so the customer portal matches the admin's Care count
+        -- (product decision). Other categories' drafts stay hidden.
+        WHERE (
+            s.status = 'active'
+            OR (s.status = 'submitted' AND LOWER(s.category_id) LIKE '%care%')
+          )
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL

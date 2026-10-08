@@ -1079,7 +1079,13 @@ export async function getPublicServices(request, env) {
         FROM services s
         LEFT JOIN categories c ON s.category_id = c.id
         LEFT JOIN providers p ON s.provider_id = p.id
-        WHERE s.status = 'active'
+        -- Show active services, plus Care services still in 'submitted' (pending
+        -- specialist verification) so the customer portal matches the admin's
+        -- Care count — per product decision. Other categories' drafts stay hidden.
+        WHERE (
+            s.status = 'active'
+            OR (s.status = 'submitted' AND LOWER(s.category_id) LIKE '%care%')
+          )
           -- No partner_approved gate — the website's per-module lists don't apply
           -- one, so neither do we (keeps mobile == web).
           -- Only "complete" listings: a service must carry its structured category
