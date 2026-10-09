@@ -3967,6 +3967,7 @@ router.get('/api/public/services-all', async (request, env) => {
           p.business_name,
           p.name as provider_name,
           p.profile_picture as profile_image_url,
+          p.area,
           p.city,
           p.state,
           p.latitude,
@@ -4108,8 +4109,9 @@ router.get('/api/public/services-all', async (request, env) => {
             name: service.provider_name || '',
             profileImage: service.profile_image_url,
             profile_image_url: service.profile_image_url,
-            // No placeholder location — blank when the provider has no city/state.
-            location: [service.city, service.state].filter(Boolean).join(', '),
+            // No placeholder location — blank when the provider has no area/city.
+            location: [service.area, service.city].filter(Boolean).join(', '),
+            area: service.area || '',
             city: service.city || '',
             state: service.state || '',
             // Real venue coordinates only (null when the provider hasn't set them).
@@ -4922,7 +4924,7 @@ router.get('/api/public/services/:id', async (request, env) => {
         s.available_pincodes, s.created_at, s.provider_id, s.status,
         s.image_urls, s.primary_image_url,
         p.id as provider_db_id, p.business_name, p.name as provider_name,
-        p.profile_picture as profile_image_url, p.city, p.state, p.is_active, p.kyc_status,
+        p.profile_picture as profile_image_url, p.area, p.city, p.state, p.is_active, p.kyc_status,
         p.experience_years, p.latitude, p.longitude,
         COALESCE((SELECT ROUND(AVG(rating), 1) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as average_rating,
         COALESCE((SELECT COUNT(*) FROM customer_reviews cr WHERE cr.provider_id = s.provider_id AND COALESCE(cr.status, 'approved') = 'approved'), 0) as review_count
@@ -5036,7 +5038,8 @@ router.get('/api/public/services/:id', async (request, env) => {
         last_name: '',
         profileImage: service.profile_image_url,
         profile_image_url: service.profile_image_url,
-        location: [service.city, service.state].filter(Boolean).join(', '),
+        location: [service.area, service.city].filter(Boolean).join(', '),
+        area: service.area || '',
         city: service.city,
         state: service.state,
         latitude: service.latitude ?? null,
