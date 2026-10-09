@@ -4116,9 +4116,9 @@ router.get('/api/public/services-all', async (request, env) => {
             address: service.provider_address || '',
             city: service.city || '',
             state: service.state || '',
-            // Real venue coordinates only (null when the provider hasn't set them).
-            latitude: (service.latitude ?? null) === null ? null : Number(service.latitude),
-            longitude: (service.longitude ?? null) === null ? null : Number(service.longitude),
+            // Real venue coordinates only (null when unset/empty/0 — never a false [0,0] pin).
+            latitude: (Number.isFinite(Number(service.latitude)) && Number(service.latitude) !== 0) ? Number(service.latitude) : null,
+            longitude: (Number.isFinite(Number(service.longitude)) && Number(service.longitude) !== 0) ? Number(service.longitude) : null,
             average_rating: Number(service.provider_rating) || 0,
             total_reviews: Number(service.provider_reviews) || 0,
             experience_years: service.experience_years || 0,
@@ -5045,8 +5045,8 @@ router.get('/api/public/services/:id', async (request, env) => {
             address: service.provider_address || '',
         city: service.city,
         state: service.state,
-        latitude: service.latitude ?? null,
-        longitude: service.longitude ?? null,
+        latitude: (Number.isFinite(Number(service.latitude)) && Number(service.latitude) !== 0) ? Number(service.latitude) : null,
+        longitude: (Number.isFinite(Number(service.longitude)) && Number(service.longitude) !== 0) ? Number(service.longitude) : null,
         // Real values ONLY — no fake 4.5★ / 3 years (Customer Spec §01 r4).
         // Null when there is nothing real; the UI hides these entirely.
         average_rating: Number(service.average_rating) > 0 ? Number(service.average_rating) : null,

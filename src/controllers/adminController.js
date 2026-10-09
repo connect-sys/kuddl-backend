@@ -3336,6 +3336,19 @@ export async function updatePartnerProfileByAdmin(request, env) {
       const col = map[k];
       if (col && !(col in updates)) updates[col] = v;
     }
+
+    // latitude/longitude: coerce to a finite number, or drop entirely so we
+    // never write '' (which the public API reads back as 0 → a false [0,0] pin).
+    for (const coord of ['latitude', 'longitude']) {
+      if (coord in updates) {
+        const n = Number(updates[coord]);
+        if (updates[coord] === '' || updates[coord] === null || !Number.isFinite(n)) {
+          delete updates[coord];
+        } else {
+          updates[coord] = n;
+        }
+      }
+    }
     if (Object.keys(updates).length === 0) {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'No updatable fields provided' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }));
