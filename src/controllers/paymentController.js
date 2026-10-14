@@ -529,6 +529,44 @@ export async function createUpiQr(request, env) {
   }
 }
 
+// Proxy a Razorpay QR image with CORS headers so the browser can read its pixels
+// (to decode the QR and re-render it clean, without Razorpay's poster branding).
+// Locked to Razorpay hosts so it can't be used as an open proxy.
+export async function proxyQrImage(request, env) {
+  try {
+    const url = new URL(request.url);
+    const src = url.searchParams.get('src');
+    if (!src) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'src is required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    let host;
+    try { host = new URL(src).hostname; } catch { host = ''; }
+    const allowed = new Set(['rzp.io', 'api.razorpay.com', 'razorpay.com']);
+    if (!allowed.has(host)) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'host not allowed' }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const resp = await fetch(src, { redirect: 'follow' });
+    if (!resp.ok) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'upstream ' + resp.status }),
+        { status: 502, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const buf = await resp.arrayBuffer();
+    return new Response(buf, {
+      headers: {
+        'Content-Type': resp.headers.get('content-type') || 'image/png',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=600',
+      },
+    });
+  } catch (error) {
+    console.error('Proxy QR image error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
 export async function getQrStatus(request, env) {
   try {
     const qrId = request.params?.qrId;

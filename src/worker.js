@@ -6888,6 +6888,11 @@ router.get('/api/payments/qr-status/:qrId', async (request, env) => {
   return paymentController.getQrStatus(request, env);
 });
 
+// CORS proxy for the Razorpay QR image so the client can decode + re-render it clean.
+router.get('/api/payments/qr-image', async (request, env) => {
+  return paymentController.proxyQrImage(request, env);
+});
+
 // Dashboard Routes
 router.get('/api/dashboard/partner/stats', async (request, env) => {
   return dashboardController.getPartnerDashboardStats(request, env);
