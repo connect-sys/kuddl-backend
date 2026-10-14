@@ -464,3 +464,91 @@ export async function getPaymentStatus(request, env) {
     }));
   }
 }
+
+// ---------------------------------------------------------------------------
+// UPI QR — create a real Razorpay dynamic QR for the amount, then poll its
+// status. Used by the in-panel "scan to pay" option (UPI Collect is being
+// deprecated and UPI Intent is not supported on desktop web). No webhook is
+// needed: the frontend polls /qr-status until Razorpay reports a captured
+// payment, which the booking is then created against.
+// ---------------------------------------------------------------------------
+
+export async function createUpiQr(request, env) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const amount = Number(body.amount);
+    if (!amount || amount <= 0) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'A valid amount is required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    const keyId = env.RAZORPAY_KEY_ID;
+    const keySecret = env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) throw new Error('Razorpay credentials not configured');
+    const auth = btoa(`${keyId}:${keySecret}`);
+
+    // Single-use, fixed-amount QR that closes 15 minutes from now.
+    const closeBy = Math.floor(Date.now() / 1000) + 15 * 60;
+    const resp = await fetch('https://api.razorpay.com/v1/payments/qr_codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${auth}` },
+      body: JSON.stringify({
+        type: 'upi_qr',
+        usage: 'single_use',
+        fixed_amount: true,
+        payment_amount: Math.round(amount * 100), // paise
+        description: (body.description || 'Kuddl booking').slice(0, 200),
+        close_by: closeBy,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error?.description || 'Failed to create QR code');
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      qrId: data.id,
+      imageUrl: data.image_url,
+      amount,
+      closeBy,
+    }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('Create UPI QR error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Could not create QR: ' + error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}
+
+export async function getQrStatus(request, env) {
+  try {
+    const qrId = request.params?.qrId;
+    if (!qrId) {
+      return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'qrId is required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    }
+    const keyId = env.RAZORPAY_KEY_ID;
+    const keySecret = env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) throw new Error('Razorpay credentials not configured');
+    const auth = btoa(`${keyId}:${keySecret}`);
+
+    const resp = await fetch(`https://api.razorpay.com/v1/payments/qr_codes/${encodeURIComponent(qrId)}/payments`, {
+      headers: { 'Authorization': `Basic ${auth}` },
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error?.description || 'Failed to fetch QR status');
+
+    // A QR payment is auto-captured; treat captured/authorized as paid.
+    const items = Array.isArray(data.items) ? data.items : [];
+    const paidPayment = items.find((p) => p.status === 'captured' || p.status === 'authorized');
+
+    return addCorsHeaders(new Response(JSON.stringify({
+      success: true,
+      paid: !!paidPayment,
+      paymentId: paidPayment ? paidPayment.id : null,
+      amount: paidPayment ? paidPayment.amount / 100 : null,
+    }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (error) {
+    console.error('Get QR status error:', error);
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Could not check QR status: ' + error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
+  }
+}

@@ -6879,6 +6879,15 @@ router.get('/api/payments/methods', async (request, env) => {
   return paymentController.getPaymentMethods(request, env);
 });
 
+// UPI QR — create a dynamic QR for the amount, then poll its status.
+router.post('/api/payments/create-qr', async (request, env) => {
+  return paymentController.createUpiQr(request, env);
+});
+
+router.get('/api/payments/qr-status/:qrId', async (request, env) => {
+  return paymentController.getQrStatus(request, env);
+});
+
 // Dashboard Routes
 router.get('/api/dashboard/partner/stats', async (request, env) => {
   return dashboardController.getPartnerDashboardStats(request, env);
