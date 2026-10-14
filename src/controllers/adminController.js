@@ -3055,7 +3055,7 @@ export async function getAdminBookings(request, env) {
         pr.name as partner_name,
         pr.business_name,
         s.name as service_name,
-        s.category as service_category
+        s.category_id as service_category
       FROM bookings b
       LEFT JOIN parents pa ON b.parent_id = pa.id
       LEFT JOIN providers pr ON b.provider_id = pr.id

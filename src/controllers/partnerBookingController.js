@@ -27,10 +27,9 @@ export async function getPartnerBookings(request, env) {
         b.status,
         b.total_amount,
         b.special_requests,
-        s.service_name,
-        s.category,
-        p.first_name as parent_first_name,
-        p.last_name as parent_last_name,
+        s.name as service_name,
+        s.category_id as category,
+        p.full_name as parent_name,
         p.phone as parent_phone,
         b.created_at,
         b.updated_at
@@ -65,7 +64,7 @@ export async function getPartnerBookings(request, env) {
         extendedProps: {
           status: booking.status,
           customerId: booking.parent_id,
-          customerName: `${booking.parent_first_name || ''} ${booking.parent_last_name || ''}`.trim(),
+          customerName: booking.parent_name || 'Customer',
           customerPhone: booking.parent_phone,
           serviceType: booking.service_name,
           category: booking.category,
@@ -175,9 +174,8 @@ export async function getPartnerBookingStats(request, env) {
         b.start_time,
         b.status,
         b.total_amount,
-        s.service_name,
-        p.first_name as parent_first_name,
-        p.last_name as parent_last_name
+        s.name as service_name,
+        p.full_name as parent_name
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id
       LEFT JOIN parents p ON b.parent_id = p.id
