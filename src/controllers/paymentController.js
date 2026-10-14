@@ -516,6 +516,9 @@ export async function createUpiQr(request, env) {
       success: true,
       qrId: data.id,
       imageUrl: data.image_url,
+      // Raw upi://pay?... string so the client can render a clean, unbranded QR
+      // (image_url is Razorpay's branded poster with the business name/logos).
+      imageContent: data.image_content || null,
       amount,
       closeBy,
     }), { headers: { 'Content-Type': 'application/json' } }));
