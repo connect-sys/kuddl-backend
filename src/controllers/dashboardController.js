@@ -425,10 +425,10 @@ export async function getPartnerCalendarBookings(request, env) {
 
     // Get all bookings for this provider (not just recent ones)
     const bookings = await env.KUDDL_DB.prepare(`
-      SELECT 
+      SELECT
         b.*,
         s.name as service_name,
-        COALESCE(p.full_name, p.name, '') as parent_name,
+        COALESCE(p.full_name, p.fullname, '') as parent_name,
         p.phone as parent_phone
       FROM bookings b
       LEFT JOIN services s ON b.service_id = s.id

@@ -78,9 +78,10 @@ export async function getPartnerEarnings(request, env) {
       const parentInfo = customerDetails.parentDetails || customerDetails;
       const customerName = parentInfo.fullName || parentInfo.name || 'Unknown Customer';
 
-      // Calculate platform fee and provider amount
+      // Calculate platform fee and provider amount.
+      // Platform fee is disabled for now (0%) — providers keep the full amount.
       const totalAmount = booking.total_amount || 0;
-      const platformFeeRate = 0.10; // 10% platform fee
+      const platformFeeRate = 0; // 0% platform fee (disabled for now)
       const platformFee = Math.round(totalAmount * platformFeeRate);
       const providerAmount = totalAmount - platformFee;
 
@@ -183,7 +184,7 @@ export async function getEarningsSummary(request, env) {
         strftime('%Y-%m', booking_date) as month,
         COUNT(*) as booking_count,
         SUM(total_amount) as gross_amount,
-        SUM(total_amount * 0.9) as net_amount,
+        SUM(total_amount) as net_amount,
         AVG(total_amount) as avg_booking_value
       FROM bookings 
       WHERE provider_id = ? 
