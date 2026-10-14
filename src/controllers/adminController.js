@@ -3085,8 +3085,12 @@ export async function getAdminBookings(request, env) {
       return {
       id: booking.id,
       parentId: booking.parent_id,
-      // name → email → mobile number → (last resort) placeholder
-      customerName: name || email || phone || 'Unknown Parent',
+      // When we have an email, show the customer's name (email is shown separately
+      // in the "Customer email" field). When there's NO email, show the mobile
+      // number instead of the name. Falls back to the placeholder only if neither
+      // a name nor a number is known.
+      customerName: email ? (name || email) : (phone || name || 'Unknown Parent'),
+      customerFullName: name,
       customerPhone: phone,
       customerEmail: email,
       partnerId: booking.provider_id,
