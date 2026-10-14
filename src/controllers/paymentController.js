@@ -502,7 +502,15 @@ export async function createUpiQr(request, env) {
       }),
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error?.description || 'Failed to create QR code');
+    if (!resp.ok) {
+      const desc = data.error?.description || '';
+      // Razorpay returns a 404 "requested URL was not found" when the QR Codes
+      // API product isn't enabled for the account — surface that plainly.
+      if (resp.status === 404 || /not found/i.test(desc)) {
+        throw new Error('QR Codes API is not enabled on this Razorpay account. Enable "QR Codes" in the Razorpay dashboard (or ask Razorpay support to enable the QR Codes API).');
+      }
+      throw new Error(desc || 'Failed to create QR code');
+    }
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
