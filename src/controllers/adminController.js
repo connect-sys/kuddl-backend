@@ -3063,10 +3063,32 @@ export async function getAdminBookings(request, env) {
       ORDER BY b.created_at DESC
     `).all();
 
-    const formattedBookings = bookings.results?.map(booking => ({
+    // The customer's name/email/phone live on the `parents` row, but a booking can
+    // point at a parent row that no longer matches (duplicate/placeholder rows),
+    // which used to show "Unknown Parent". The booking itself also stores the
+    // contact the customer entered (special_requests.parentDetails), so fall back
+    // to that, and finally to the phone number, before giving up.
+    const parentDetailsOf = (booking) => {
+      try {
+        const sr = typeof booking.special_requests === 'string'
+          ? JSON.parse(booking.special_requests || '{}')
+          : (booking.special_requests || {});
+        return sr?.parentDetails || {};
+      } catch { return {}; }
+    };
+
+    const formattedBookings = bookings.results?.map(booking => {
+      const pd = parentDetailsOf(booking);
+      const phone = (booking.parent_phone || pd.phone || '').toString().trim();
+      const email = (booking.parent_email || pd.email || '').toString().trim();
+      const name = (booking.parent_name || pd.fullName || '').toString().trim();
+      return {
       id: booking.id,
       parentId: booking.parent_id,
-      customerName: booking.parent_name || booking.parent_email || 'Unknown Parent',
+      // name → email → mobile number → (last resort) placeholder
+      customerName: name || email || phone || 'Unknown Parent',
+      customerPhone: phone,
+      customerEmail: email,
       partnerId: booking.provider_id,
       partnerName: booking.business_name || booking.partner_name || 'Unknown Partner',
       serviceName: booking.service_name || 'Unknown Service',
@@ -3076,10 +3098,11 @@ export async function getAdminBookings(request, env) {
       duration: booking.duration_minutes || 60,
       amount: booking.total_amount || 0,
       status: booking.status,
-      address: booking.parent_email || '',
+      address: email || '',
       notes: booking.special_requests || '',
       createdAt: booking.created_at
-    })) || [];
+      };
+    }) || [];
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
