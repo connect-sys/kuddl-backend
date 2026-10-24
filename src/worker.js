@@ -2705,13 +2705,61 @@ router.delete('/api/admin/partners/:id', async (request, env) => {
       return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Provider not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    // Delete provider (foreign keys may cascade if defined)
+    // Cascade delete: a bare `DELETE FROM providers` fails when the partner has
+    // services/bookings/etc. referencing it (FK constraint). Clear all related
+    // rows first, introspecting every table so nothing is missed.
+    const idsFor = async (sql) => {
+      try { const r = await env.KUDDL_DB.prepare(sql).bind(providerId).all(); return (r.results || []).map((x) => x.id).filter(Boolean); }
+      catch { return []; }
+    };
+    const serviceIds = await idsFor('SELECT id FROM services WHERE provider_id = ?');
+    const bookingIds = await idsFor('SELECT id FROM bookings WHERE provider_id = ?');
+    const campIds = await idsFor('SELECT id FROM camps WHERE provider_id = ?');
+
+    // Group tables by which foreign-key column they carry.
+    const byProvider = [], byService = [], byBooking = [], byCamp = [];
+    try {
+      const tbls = await env.KUDDL_DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+      const names = (tbls.results || []).map((r) => r.name).filter((n) => n && n !== 'providers' && !n.startsWith('sqlite_'));
+      for (const t of names) {
+        try {
+          const info = await env.KUDDL_DB.prepare(`PRAGMA table_info(${t})`).all();
+          const cols = new Set((info.results || []).map((c) => c.name));
+          if (cols.has('booking_id')) byBooking.push(t);
+          if (cols.has('service_id')) byService.push(t);
+          if (cols.has('camp_id')) byCamp.push(t);
+          if (cols.has('provider_id')) byProvider.push(t);
+          else if (cols.has('partner_id')) byProvider.push(`${t}|partner_id`);
+        } catch { /* skip odd tables */ }
+      }
+    } catch (e) { console.log('delete-partner introspection failed:', e.message); }
+
+    const delIn = async (table, col, ids) => {
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        const ph = chunk.map(() => '?').join(',');
+        try { await env.KUDDL_DB.prepare(`DELETE FROM ${table} WHERE ${col} IN (${ph})`).bind(...chunk).run(); }
+        catch (e) { console.log('cascade skip', table, col, e.message); }
+      }
+    };
+
+    // Pass 1: grandchildren (reference a service / booking / camp).
+    for (const t of byBooking) await delIn(t, 'booking_id', bookingIds);
+    for (const t of byService) await delIn(t, 'service_id', serviceIds);
+    for (const t of byCamp) await delIn(t, 'camp_id', campIds);
+    // Pass 2: direct children (reference the provider / partner).
+    for (const entry of byProvider) {
+      const [t, col = 'provider_id'] = entry.split('|');
+      try { await env.KUDDL_DB.prepare(`DELETE FROM ${t} WHERE ${col} = ?`).bind(providerId).run(); }
+      catch (e) { console.log('cascade skip', t, col, e.message); }
+    }
+    // Pass 3: the provider.
     await env.KUDDL_DB.prepare('DELETE FROM providers WHERE id = ?').bind(providerId).run();
 
     return addCorsHeaders(new Response(JSON.stringify({ success: true, message: 'Provider deleted' }), { headers: { 'Content-Type': 'application/json' } }));
   } catch (error) {
     console.error('Delete provider error:', error);
-    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Internal server error' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+    return addCorsHeaders(new Response(JSON.stringify({ success: false, message: 'Internal server error', error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 });
 
