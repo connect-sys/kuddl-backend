@@ -4074,6 +4074,11 @@ router.get('/api/public/services-all', async (request, env) => {
           AND (
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
+            -- Legacy Care listings never moved to care_pricing but with a real
+            -- price are still sellable — surface them (the page falls back to the
+            -- generic price/title). Truly-empty Care (no price) stays hidden.
+            -- (Issue 7: Care partners present in admin but missing from the site.)
+            OR (LOWER(s.category_id) LIKE '%care%' AND s.price > 0)
             -- Batches count for BLOOM and DISCOVER services (Discover now uses
             -- the Bloom form, so its price lives on the batches, not services.price).
             -- An Adventure/Care service with a stray batch stays hidden.

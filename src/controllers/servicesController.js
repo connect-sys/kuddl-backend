@@ -1096,6 +1096,9 @@ export async function getPublicServices(request, env) {
             s.adventure_pricing IS NOT NULL
             OR s.care_pricing IS NOT NULL
             OR s.bloom_pricing IS NOT NULL
+            -- Legacy Care listings with a real price but no care_pricing are still
+            -- sellable (page falls back to the generic price). Issue 7.
+            OR (LOWER(s.category_id) LIKE '%care%' AND s.price > 0)
             OR (LOWER(s.category_id) LIKE '%bloom%'
                 AND EXISTS (SELECT 1 FROM batches b WHERE b.parent_id = s.id))
             OR (LOWER(s.category_id) LIKE '%discover%' AND s.price > 0)
