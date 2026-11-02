@@ -4004,6 +4004,7 @@ router.get('/api/public/services-all', async (request, env) => {
           s.price,
           s.duration_minutes,
           s.features,
+          s.adventure_pricing,
           s.tags,
           s.available_pincodes,
           s.image_urls,
@@ -4140,6 +4141,9 @@ router.get('/api/public/services-all', async (request, env) => {
           min_batch_price: service.min_batch_price ?? null,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : [],
+          // Adventure party blob — cards need performer_type + exact age band that
+          // the kids-capped generic age logic would otherwise hide (showed "50+").
+          adventurePricing: service.adventure_pricing ? (typeof service.adventure_pricing === 'string' ? (() => { try { return JSON.parse(service.adventure_pricing); } catch { return undefined; } })() : service.adventure_pricing) : undefined,
           // Customer-facing extras extracted from features (display-only).
           ...extractServiceExtras(service.features),
           available_pincodes: service.available_pincodes,

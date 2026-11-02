@@ -1059,6 +1059,7 @@ export async function getPublicServices(request, env) {
           (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price,
           s.duration_minutes,
           s.features,
+          s.adventure_pricing,
           s.tags,
           s.available_pincodes,
           s.image_urls,
@@ -1180,6 +1181,10 @@ export async function getPublicServices(request, env) {
           duration: service.duration_minutes,
           duration_minutes: service.duration_minutes,
           features: service.features ? (typeof service.features === 'string' ? JSON.parse(service.features) : service.features) : {},
+          // Adventure party blob — cards need performer_type + exact age band
+          // (detail already returns this; list did not, so cards showed "Performer"
+          // with no act and a kids-capped age).
+          adventurePricing: service.adventure_pricing ? (typeof service.adventure_pricing === 'string' ? (() => { try { return JSON.parse(service.adventure_pricing); } catch { return undefined; } })() : service.adventure_pricing) : undefined,
           // Partner-added free-text tags (JSON array) so cards show the real
           // chips, not just derived fallbacks (bug 1).
           tags: service.tags ? (typeof service.tags === 'string' ? (() => { try { return JSON.parse(service.tags); } catch { return []; } })() : service.tags) : [],
