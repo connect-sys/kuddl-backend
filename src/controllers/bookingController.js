@@ -67,7 +67,10 @@ export async function createBooking(request, env) {
       // in the customer's bookings (Build Spec v3 · B3).
       bookingType,
       // Camp Architecture v2.0 — optional batch this booking is for.
-      batchId
+      batchId,
+      // Bloom "Comes to You": place, full address + map pin, children / friends
+      // / group, sessions, days, time and the price lines picked by the parent.
+      comesToYou
     } = await request.json();
 
     // If no parentId from token, create/find parent using phone from parentDetails
@@ -361,7 +364,8 @@ export async function createBooking(request, env) {
       // Period services (monthly/weekly/session/batch/term) carry an end date so
       // the booking reflects the full time frame, not just the start day.
       selectedEndDate: selectedEndDate || null,
-      orderId: orderId || null // Store orderId in metadata
+      orderId: orderId || null, // Store orderId in metadata
+      comesToYou: comesToYou && typeof comesToYou === 'object' ? comesToYou : null
     };
 
     // Determine status via the booking state machine (the money spine).
