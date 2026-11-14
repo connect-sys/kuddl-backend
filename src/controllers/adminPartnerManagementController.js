@@ -1,6 +1,6 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
-import { removeServiceRecord } from './servicesController.js';
+import { removeServiceRecord, ensureServiceDeletedAt } from './servicesController.js';
 
 /**
  * True only for a valid admin JWT.
@@ -63,6 +63,7 @@ export async function getPartnerServices(request, env) {
     const pathParts = url.pathname.split('/');
     const partnerId = pathParts[pathParts.indexOf('partners') + 1];
 
+    await ensureServiceDeletedAt(env);
     const services = await env.KUDDL_DB.prepare(`
       SELECT s.*, c.name as category_name,
         -- Bloom v3 keeps the price on the batches (services.price is 0), so expose
@@ -70,7 +71,7 @@ export async function getPartnerServices(request, env) {
         (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price
       FROM services s
       LEFT JOIN categories c ON s.category_id = c.id
-      WHERE s.provider_id = ? AND COALESCE(s.status, '') != 'deleted'
+      WHERE s.provider_id = ? AND s.deleted_at IS NULL
       ORDER BY s.created_at DESC
     `).bind(partnerId).all();
 

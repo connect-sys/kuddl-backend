@@ -267,14 +267,15 @@ export async function getMyServices(request, env) {
     console.log('✅ Provider verified:', providerId);
     console.log('🔍 Fetching services for provider:', providerId);
     
-    // Fetch only services for this provider
+    // Fetch only services for this provider (archived ones carry deleted_at)
+    await ensureServiceDeletedAt(env);
     const query = `
       SELECT 
         s.*,
         c.name as category_name
       FROM services s
       LEFT JOIN categories c ON s.category_id = c.id
-      WHERE s.provider_id = ? AND COALESCE(s.status, '') != 'deleted'
+      WHERE s.provider_id = ? AND s.deleted_at IS NULL
       ORDER BY s.created_at DESC
     `;
     
@@ -1330,12 +1331,32 @@ export async function getTopSubcategories(request, env) {
 }
 
 // Delete service endpoint
+// Archived services carry a deleted_at timestamp. The live services.status
+// CHECK only allows active/inactive/draft (writing 'deleted' or 'archived'
+// is rejected), so archiving sets status 'inactive' — which already hides it
+// from the public site — plus deleted_at, which hides it from partner/admin
+// lists. D1 has no "ADD COLUMN IF NOT EXISTS", so check PRAGMA once per isolate.
+let deletedAtReady = false;
+export async function ensureServiceDeletedAt(env) {
+  if (deletedAtReady) return;
+  const info = await env.KUDDL_DB.prepare('PRAGMA table_info(services)').all();
+  const have = new Set((info.results || []).map((c) => c.name));
+  if (!have.has('deleted_at')) {
+    try {
+      await env.KUDDL_DB.prepare('ALTER TABLE services ADD COLUMN deleted_at TEXT').run();
+    } catch (err) {
+      // A concurrent request may have added it first.
+      if (!/duplicate column/i.test(err?.message || '')) throw err;
+    }
+  }
+  deletedAtReady = true;
+}
+
 // Remove a service. bookings/reviews reference services WITHOUT ON DELETE
 // CASCADE, so a plain DELETE fails ("FOREIGN KEY constraint failed") for any
-// service that was ever booked or reviewed — that's why some services could
-// not be deleted. Never booked → delete it and its reviews in one transaction.
-// Has bookings → archive it (status 'deleted') so booking/payment history keeps
-// its service row; archived services are hidden from every list.
+// service that was ever booked or reviewed. Never booked → delete it and its
+// reviews in one transaction. Otherwise archive it (see above) so booking and
+// payment history keeps its service row.
 export async function removeServiceRecord(env, serviceId) {
   const booked = await env.KUDDL_DB.prepare(
     'SELECT COUNT(*) AS n FROM bookings WHERE service_id = ?'
@@ -1354,8 +1375,9 @@ export async function removeServiceRecord(env, serviceId) {
     }
   }
 
+  await ensureServiceDeletedAt(env);
   await env.KUDDL_DB.prepare(
-    "UPDATE services SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    "UPDATE services SET status = 'inactive', deleted_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).bind(serviceId).run();
   return 'archived';
 }
@@ -1832,6 +1854,7 @@ export async function getAllServicesForAdmin(request, env) {
       }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
     }
 
+    await ensureServiceDeletedAt(env);
     const services = await env.KUDDL_DB.prepare(`
       SELECT
         s.*,
@@ -1845,7 +1868,7 @@ export async function getAllServicesForAdmin(request, env) {
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       LEFT JOIN categories c ON s.category_id = c.id
-      WHERE COALESCE(s.status, '') != 'deleted'
+      WHERE s.deleted_at IS NULL
       ORDER BY s.created_at DESC
     `).all();
 
