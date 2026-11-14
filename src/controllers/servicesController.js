@@ -274,7 +274,7 @@ export async function getMyServices(request, env) {
         c.name as category_name
       FROM services s
       LEFT JOIN categories c ON s.category_id = c.id
-      WHERE s.provider_id = ?
+      WHERE s.provider_id = ? AND COALESCE(s.status, '') != 'deleted'
       ORDER BY s.created_at DESC
     `;
     
@@ -1330,6 +1330,36 @@ export async function getTopSubcategories(request, env) {
 }
 
 // Delete service endpoint
+// Remove a service. bookings/reviews reference services WITHOUT ON DELETE
+// CASCADE, so a plain DELETE fails ("FOREIGN KEY constraint failed") for any
+// service that was ever booked or reviewed — that's why some services could
+// not be deleted. Never booked → delete it and its reviews in one transaction.
+// Has bookings → archive it (status 'deleted') so booking/payment history keeps
+// its service row; archived services are hidden from every list.
+export async function removeServiceRecord(env, serviceId) {
+  const booked = await env.KUDDL_DB.prepare(
+    'SELECT COUNT(*) AS n FROM bookings WHERE service_id = ?'
+  ).bind(serviceId).first().catch(() => ({ n: 0 }));
+
+  if (!booked || !booked.n) {
+    try {
+      await env.KUDDL_DB.batch([
+        env.KUDDL_DB.prepare('DELETE FROM reviews WHERE service_id = ?').bind(serviceId),
+        env.KUDDL_DB.prepare('DELETE FROM services WHERE id = ?').bind(serviceId),
+      ]);
+      return 'deleted';
+    } catch (err) {
+      // Some other table still points at it — fall through to archiving.
+      console.warn('Hard delete failed, archiving service instead:', serviceId, err?.message);
+    }
+  }
+
+  await env.KUDDL_DB.prepare(
+    "UPDATE services SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).bind(serviceId).run();
+  return 'archived';
+}
+
 export async function deleteService(request, env) {
   try {
     // Get service ID from URL
@@ -1418,10 +1448,8 @@ export async function deleteService(request, env) {
       }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    // Delete the service
-    await env.KUDDL_DB.prepare(`
-      DELETE FROM services WHERE id = ?
-    `).bind(serviceId).run();
+    // Delete (or archive, if it has bookings) the service.
+    await removeServiceRecord(env, serviceId);
 
     console.log('✅ Service deleted successfully:', serviceId);
 
@@ -1817,6 +1845,7 @@ export async function getAllServicesForAdmin(request, env) {
       FROM services s
       LEFT JOIN providers p ON s.provider_id = p.id
       LEFT JOIN categories c ON s.category_id = c.id
+      WHERE COALESCE(s.status, '') != 'deleted'
       ORDER BY s.created_at DESC
     `).all();
 

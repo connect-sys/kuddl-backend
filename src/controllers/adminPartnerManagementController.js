@@ -1,5 +1,6 @@
 import { addCorsHeaders } from '../utils/cors.js';
 import jwt from '@tsndr/cloudflare-worker-jwt';
+import { removeServiceRecord } from './servicesController.js';
 
 /**
  * True only for a valid admin JWT.
@@ -69,7 +70,7 @@ export async function getPartnerServices(request, env) {
         (SELECT MIN(b.price) FROM batches b WHERE b.parent_id = s.id AND b.price > 0) AS min_batch_price
       FROM services s
       LEFT JOIN categories c ON s.category_id = c.id
-      WHERE s.provider_id = ?
+      WHERE s.provider_id = ? AND COALESCE(s.status, '') != 'deleted'
       ORDER BY s.created_at DESC
     `).bind(partnerId).all();
 
@@ -89,6 +90,9 @@ export async function getPartnerServices(request, env) {
 // Delete partner service
 export async function deletePartnerService(request, env) {
   try {
+    // Was unauthenticated (like deletePartnerCamp before it) — admins only.
+    if (!(await isAdminRequest(request, env))) return forbidden();
+
     const url = new URL(request.url);
     const pathParts = url.pathname.split('/');
     const serviceId = pathParts[pathParts.length - 1];
@@ -106,9 +110,8 @@ export async function deletePartnerService(request, env) {
       }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    await env.KUDDL_DB.prepare(`
-      DELETE FROM services WHERE id = ?
-    `).bind(serviceId).run();
+    // Plain DELETE hit the bookings/reviews foreign keys for any booked service.
+    await removeServiceRecord(env, serviceId);
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,
