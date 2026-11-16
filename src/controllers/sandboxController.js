@@ -5,8 +5,7 @@ async function getSandboxAccessToken(env) {
   try {
     console.log('🔐 [Sandbox] Authenticating with API...');
     console.log('🔐 [Sandbox] Base URL:', env.SANDBOX_BASE_URL);
-    console.log('🔐 [Sandbox] API Key:', env.SANDBOX_APPID ? `${env.SANDBOX_APPID.substring(0, 15)}...` : 'MISSING');
-    console.log('🔐 [Sandbox] API Secret:', env.SANDBOX_SECRET ? `${env.SANDBOX_SECRET.substring(0, 15)}...` : 'MISSING');
+    console.log('🔐 [Sandbox] Keys set:', !!env.SANDBOX_APPID, !!env.SANDBOX_SECRET);
     
     const response = await fetch(`${env.SANDBOX_BASE_URL}/authenticate`, {
       method: 'POST',
@@ -19,14 +18,13 @@ async function getSandboxAccessToken(env) {
 
     const data = await response.json();
     console.log('🔐 [Sandbox] Auth response status:', response.status);
-    console.log('🔐 [Sandbox] Auth response data:', JSON.stringify(data, null, 2));
     
     if (response.ok && data.data?.access_token) {
       console.log('✅ [Sandbox] Authentication successful');
       return data.data.access_token;
     } else {
-      console.error('❌ [Sandbox] Authentication failed:', data);
-      throw new Error(`Authentication failed: ${data.message || JSON.stringify(data)}`);
+      console.error('❌ [Sandbox] Authentication failed:', response.status, data?.message || data?.code);
+      throw new Error(`Authentication failed: ${data?.message || response.status}`);
     }
   } catch (error) {
     console.error('💥 [Sandbox] Authentication error:', error);
@@ -61,7 +59,6 @@ export async function sendAadhaarOtp(request, env) {
     const isTestMode = env.SANDBOX_API_TEST_MODE === 'true';
     console.log('🔍 SANDBOX_API_TEST_MODE value:', env.SANDBOX_API_TEST_MODE, 'type:', typeof env.SANDBOX_API_TEST_MODE);
     console.log('🔍 isTestMode:', isTestMode);
-    console.log('🔍 All env vars:', Object.keys(env));
 
     if (isTestMode) {
       console.log('🧪 [Test Mode] Sending Aadhaar OTP for provider:', providerId);
@@ -96,6 +93,7 @@ export async function sendAadhaarOtp(request, env) {
           headers: {
             'Authorization': accessToken, // Just the token, no "Bearer" prefix for Sandbox API
             'x-api-key': env.SANDBOX_APPID,
+            'x-api-version': '1.0',
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -107,7 +105,7 @@ export async function sendAadhaarOtp(request, env) {
         });
 
         const data = await response.json();
-        console.log('🔍 Sandbox API Response:', JSON.stringify(data, null, 2));
+        console.log('🔍 Sandbox OTP send:', response.status, data?.code, data?.data?.message || data?.message);
 
         // Check for successful response (Sandbox API returns code: 200)
         if (data.code === 200 && data.data) {
@@ -210,13 +208,6 @@ export async function verifyAadhaarOtp(request, env) {
           otp: String(otp) // Convert to string as per API docs
         };
         
-        console.log('🔍 Sandbox API Verify Request Body:', JSON.stringify(requestBody, null, 2));
-        console.log('🔍 Sandbox API Verify Headers:', {
-          'Authorization': `${accessToken.substring(0, 20)}...`, // Log partial token for debugging
-          'x-api-key': env.SANDBOX_APPID,
-          'x-api-version': '1.0',
-          'Content-Type': 'application/json'
-        });
         
         // Live mode - make actual API call to Sandbox API
         const response = await fetch(`${env.SANDBOX_BASE_URL}/kyc/aadhaar/okyc/otp/verify`, {
@@ -225,17 +216,19 @@ export async function verifyAadhaarOtp(request, env) {
             'Authorization': accessToken, // Just the token, no "Bearer" prefix for Sandbox API
             'x-api-key': env.SANDBOX_APPID,
             'x-api-version': '1.0',
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify(requestBody)
         });
-        console.log('🔍 Sandbox API Verify Response:', response);
-
         const data = await response.json();
         console.log('🔍 Sandbox API Verify Response Status:', response.status);
-        console.log('🔍 Sandbox API Verify Response:', JSON.stringify(data, null, 2));
+        // Only status lines — the body holds the partner's Aadhaar name, address and photo.
+        console.log('🔍 Sandbox OTP verify:', data?.code, data?.data?.status, data?.data?.message || data?.message);
 
         // Check for successful response (Sandbox API returns code: 200)
-        if (response.ok && data.code === 200) {
+        // Sandbox can answer 200 with a non-VALID status (e.g. wrong/expired OTP).
+        const status = data?.data?.status;
+        if (response.ok && data.code === 200 && data.data && (!status || status === 'VALID')) {
           return createApiResponse({
             success: true,
             message: 'Aadhaar verified successfully',
@@ -247,7 +240,7 @@ export async function verifyAadhaarOtp(request, env) {
         } else {
           return createApiResponse({
             success: false,
-            message: data.message || 'OTP verification failed'
+            message: data?.data?.message || data.message || 'OTP verification failed'
           }, 400);
         }
           
