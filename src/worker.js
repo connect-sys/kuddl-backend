@@ -2988,6 +2988,12 @@ router.put('/api/admin/partners/:id/verify', async (request, env) => {
   return adminController.updatePartnerVerification(request, env);
 });
 
+// Admin approves / rejects a manually uploaded Aadhaar card.
+router.post('/api/admin/partners/:id/aadhaar-review', async (request, env) => {
+  const { reviewManualAadhaar } = await import('./controllers/kycBusinessController.js');
+  return reviewManualAadhaar(request, env);
+});
+
 // Admin edits a partner's profile (same fields the partner can self-edit).
 router.put('/api/admin/partners/:id/profile', async (request, env) => {
   return adminController.updatePartnerProfileByAdmin(request, env);

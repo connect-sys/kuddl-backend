@@ -4,6 +4,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { handleCorsOptions } from '../utils/cors.js';
 import * as sandboxController from '../controllers/sandboxController.js';
 import { startDigilocker, digilockerStatus } from '../controllers/digilockerController.js';
+import { submitManualAadhaar, verifyGstin, verifyCin } from '../controllers/kycBusinessController.js';
 
 const router = Router();
 
@@ -37,7 +38,13 @@ router.get('/api/kyc/digilocker/status', withAuth(digilockerStatus));
 
 
 // GST verification route - Sandbox
-router.post('/api/kyc/gst/verify', withAuth(sandboxController.verifyGst));
+router.post('/api/kyc/gst/verify', withAuth(verifyGstin));
+
+// CIN / LLPIN verification route - Sandbox MCA company master data
+router.post('/api/kyc/cin/verify', withAuth(verifyCin));
+
+// Aadhaar card uploaded manually (no DigiLocker) → admin review
+router.post('/api/kyc/aadhaar/manual', withAuth(submitManualAadhaar));
 
 // PAN verification route - Sandbox
 router.post('/api/kyc/pan/verify', withAuth(sandboxController.verifyPan));

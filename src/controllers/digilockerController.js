@@ -1,4 +1,5 @@
 import { createApiResponse } from '../utils/cors.js';
+import { ensureKycColumns } from './kycBusinessController.js';
 
 /**
  * Aadhaar verification through DigiLocker (Sandbox API).
@@ -132,8 +133,9 @@ export async function startDigilocker(request, env) {
 
 async function markVerified(env, providerId, sessionId, details) {
   const masked = details.aadhaar_last4 ? `XXXXXXXX${details.aadhaar_last4}` : null;
+  await ensureKycColumns(env);
   await env.KUDDL_DB.batch([
-    env.KUDDL_DB.prepare(`UPDATE providers SET is_aadhaar_verified = 1, aadhaar_number = COALESCE(?, aadhaar_number) WHERE id = ?`).bind(masked, providerId),
+    env.KUDDL_DB.prepare(`UPDATE providers SET is_aadhaar_verified = 1, aadhaar_method = 'digilocker', aadhaar_review_status = 'approved', aadhaar_number = COALESCE(?, aadhaar_number) WHERE id = ?`).bind(masked, providerId),
     env.KUDDL_DB.prepare(`UPDATE digilocker_sessions SET status = 'verified', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(sessionId),
   ]);
 }

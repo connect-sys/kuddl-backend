@@ -8,7 +8,7 @@ import { removeServiceRecord, ensureServiceDeletedAt } from './servicesControlle
  * Accepts both admin conventions used in this codebase (role claim, or the admin
  * email) so existing admin tokens keep working.
  */
-async function isAdminRequest(request, env) {
+export async function isAdminRequest(request, env) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
   const token = authHeader.substring(7);

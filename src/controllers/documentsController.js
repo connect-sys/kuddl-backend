@@ -304,6 +304,9 @@ export async function uploadProfileDocument(request, env) {
           case 'aadhaarCard':
             columnName = 'aadhaar_card_url';
             break;
+          case 'aadhaarCardBack':
+            columnName = 'aadhaar_card_back_url';
+            break;
           case 'cancelledCheque':
             columnName = 'cancelled_cheque_url';
             break;
@@ -313,6 +316,10 @@ export async function uploadProfileDocument(request, env) {
         
         if (columnName) {
           try {
+            if (columnName.startsWith('aadhaar_card')) {
+              const { ensureKycColumns } = await import('./kycBusinessController.js');
+              await ensureKycColumns(env);
+            }
             await env.KUDDL_DB.prepare(`
               UPDATE providers SET ${columnName} = ?, updated_at = ? WHERE id = ?
             `).bind(publicUrl, new Date().toISOString(), partnerId).run();
