@@ -3,6 +3,7 @@ import { Router } from 'itty-router';
 import { authenticateToken } from '../middleware/auth.js';
 import { handleCorsOptions } from '../utils/cors.js';
 import * as sandboxController from '../controllers/sandboxController.js';
+import { startDigilocker, digilockerStatus } from '../controllers/digilockerController.js';
 
 const router = Router();
 
@@ -29,6 +30,10 @@ router.get('/api/kyc/status', withAuth(sandboxController.getKycStatus));
 // Aadhaar verification routes (OTP flow) - Sandbox
 router.post('/api/kyc/aadhaar/send-otp', withAuth(sandboxController.sendAadhaarOtp));
 router.post('/api/kyc/aadhaar/verify-otp', withAuth(sandboxController.verifyAadhaarOtp));
+
+// Aadhaar via DigiLocker — replaces the OTP flow (UIDAI discontinued OKYC).
+router.post('/api/kyc/digilocker/start', withAuth(startDigilocker));
+router.get('/api/kyc/digilocker/status', withAuth(digilockerStatus));
 
 
 // GST verification route - Sandbox
