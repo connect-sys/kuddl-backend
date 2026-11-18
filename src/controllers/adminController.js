@@ -3243,34 +3243,45 @@ export async function getAllPartners(request, env) {
 
     const partnersList = providers.results || [];
 
-    // For each partner, fetch their services and camps counts
-    const enrichedPartners = await Promise.all(partnersList.map(async (provider) => {
-      let servicesCount = 0;
-      let campsCount = 0;
-      let services = [];
-      let camps = [];
-
-      try {
-        const servicesResult = await env.KUDDL_DB.prepare(
-          `SELECT id, name, price, status FROM services WHERE provider_id = ? LIMIT 10`
-        ).bind(provider.id).all();
-        services = servicesResult.results || [];
-        servicesCount = services.length;
-      } catch (e) {
-        console.warn('Could not fetch services for provider:', provider.id);
+    // Up to 10 services / camps per partner, fetched in ONE query each and
+    // grouped in memory. (This used to run 2 queries per partner — an N+1 that
+    // scanned both tables ~600 times per admin page load and exhausted D1's
+    // daily read quota, taking the whole site's catalogue down.)
+    const groupTop10 = (rows) => {
+      const byProvider = new Map();
+      for (const r of rows || []) {
+        const list = byProvider.get(r.provider_id) || [];
+        if (list.length < 10) list.push({ id: r.id, name: r.name, price: r.price, status: r.status });
+        byProvider.set(r.provider_id, list);
       }
+      return byProvider;
+    };
+    let servicesByProvider = new Map();
+    let campsByProvider = new Map();
+    try {
+      const r = await env.KUDDL_DB.prepare(
+        `SELECT provider_id, id, name, price, status FROM services WHERE provider_id IS NOT NULL`
+      ).all();
+      servicesByProvider = groupTop10(r.results);
+    } catch (e) {
+      console.warn('Could not fetch services for partners list:', e?.message);
+    }
+    try {
+      // The camps table uses `title`, not `name` — alias it so the frontend
+      // (which expects { id, name, price, status }) keeps working.
+      const r = await env.KUDDL_DB.prepare(
+        `SELECT provider_id, id, title AS name, price, status FROM camps WHERE provider_id IS NOT NULL`
+      ).all();
+      campsByProvider = groupTop10(r.results);
+    } catch (e) {
+      console.warn('Could not fetch camps for partners list:', e?.message);
+    }
 
-      try {
-        // The camps table uses `title`, not `name` — alias it so the frontend
-        // (which expects { id, name, price, status }) keeps working.
-        const campsResult = await env.KUDDL_DB.prepare(
-          `SELECT id, title AS name, price, status FROM camps WHERE provider_id = ? LIMIT 10`
-        ).bind(provider.id).all();
-        camps = campsResult.results || [];
-        campsCount = camps.length;
-      } catch (e) {
-        console.warn('Could not fetch camps for provider:', provider.id, e?.message);
-      }
+    const enrichedPartners = partnersList.map((provider) => {
+      const services = servicesByProvider.get(provider.id) || [];
+      const camps = campsByProvider.get(provider.id) || [];
+      const servicesCount = services.length;
+      const campsCount = camps.length;
 
       return {
         id: provider.id,
@@ -3299,7 +3310,7 @@ export async function getAllPartners(request, env) {
         services,
         camps
       };
-    }));
+    });
 
     return addCorsHeaders(new Response(JSON.stringify({
       success: true,

@@ -4203,20 +4203,28 @@ router.get('/api/public/services-all', async (request, env) => {
       }));
 
     } catch (dbError) {
-      console.log('Database error in services-all:', dbError);
+      // Report the failure (503), never a fake "success, zero services": an
+      // empty 200 is indistinguishable from "no services" and hides outages
+      // (e.g. the D1 daily read quota). The edge cache layer serves the last
+      // good catalogue on a 5xx, so parents still see services.
+      console.error('Database error in services-all:', dbError?.message || dbError);
       return addCorsHeaders(new Response(JSON.stringify({
-        success: true,
-        data: []
+        success: false,
+        data: [],
+        message: 'Services are temporarily unavailable'
       }), {
+        status: 503,
         headers: { 'Content-Type': 'application/json' }
       }));
     }
   } catch (error) {
-    console.error('Services-all fetch error:', error);
+    console.error('Services-all fetch error:', error?.message || error);
     return addCorsHeaders(new Response(JSON.stringify({
-      success: true,
-      data: []
+      success: false,
+      data: [],
+      message: 'Services are temporarily unavailable'
     }), {
+      status: 503,
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -7877,6 +7885,102 @@ router.options('*', () => {
   return addCorsHeaders(new Response(null, { status: 200 }));
 });
 
+// ── Edge cache for public, anonymous GETs ─────────────────────────────────────
+// Every page view used to hit D1 directly, so traffic spikes (or one expensive
+// admin page) could exhaust the D1 daily read quota and blank the whole site.
+// Public catalogue reads are now served from Cloudflare's edge cache:
+//   • fresh copy  — reused for `fresh` seconds, so D1 sees ~1 read per URL per
+//                   minute per data centre instead of one per visitor;
+//   • stale copy  — the last good response, kept for `stale` seconds and served
+//                   whenever the live call fails (5xx, D1 quota/outage), so
+//                   parents keep seeing services during a database outage.
+// Only anonymous GETs (no Authorization header) on the allow-list are cached;
+// anything per-user, live (seat availability, OTP) or admin never is.
+const EDGE_CACHE_RULES = [
+  // R2 images: content at a key rarely changes; cache long, no stale needed.
+  { test: (p) => p.startsWith('/api/r2/view/'), fresh: 86400, stale: 0, binary: true },
+  { test: (p) => p === '/api/public/services-all', fresh: 60, stale: 86400 },
+  { test: (p) => /^\/api\/public\/services\/[^/]+(\/reviews)?$/.test(p), fresh: 60, stale: 86400 },
+  { test: (p) => p.startsWith('/api/public/') , fresh: 300, stale: 86400 },
+  { test: (p) => p === '/api/categories' || p.startsWith('/api/categories/'), fresh: 300, stale: 86400 },
+  { test: (p) => p === '/api/subcategories' || p.startsWith('/api/subcategories/'), fresh: 300, stale: 86400 },
+  { test: (p) => p === '/api/pincodes' || p === '/api/pincodes/list' || p === '/api/pincodes/search', fresh: 3600, stale: 86400 },
+];
+
+function edgeCachePolicy(request) {
+  if (request.method !== 'GET') return null;
+  if (request.headers.get('Authorization')) return null;
+  const path = new URL(request.url).pathname;
+  return EDGE_CACHE_RULES.find((r) => r.test(path)) || null;
+}
+
+function edgeCacheKey(request, variant) {
+  const u = new URL(request.url);
+  u.searchParams.delete('_'); // common cache-buster param
+  u.searchParams.sort();
+  if (variant) u.searchParams.set('__edge', variant);
+  return new Request(u.toString(), { method: 'GET' });
+}
+
+async function edgeCacheLookup(request, rule) {
+  try {
+    const hit = await caches.default.match(edgeCacheKey(request, 'fresh'));
+    if (!hit) return null;
+    const res = new Response(hit.body, hit);
+    res.headers.set('X-Edge-Cache', 'HIT');
+    return res;
+  } catch {
+    return null; // cache trouble must never break the request
+  }
+}
+
+// A response is worth caching only if it's a real success: 200 and, for JSON,
+// not an error envelope ({ success: false }).
+async function isGoodResponse(response, rule) {
+  if (response.status !== 200) return false;
+  if (rule.binary) return true;
+  try {
+    const body = await response.clone().json();
+    return body?.success !== false;
+  } catch {
+    return false;
+  }
+}
+
+function asCacheable(response, ttl) {
+  const res = new Response(response.clone().body, response);
+  res.headers.set('Cache-Control', `public, max-age=${ttl}`);
+  res.headers.delete('Set-Cookie');
+  res.headers.delete('Pragma');
+  res.headers.delete('Expires');
+  return res;
+}
+
+async function edgeCacheStore(request, response, rule, ctx) {
+  try {
+    if (await isGoodResponse(response, rule)) {
+      const writes = [caches.default.put(edgeCacheKey(request, 'fresh'), asCacheable(response, rule.fresh))];
+      if (rule.stale) writes.push(caches.default.put(edgeCacheKey(request, 'stale'), asCacheable(response, rule.stale)));
+      ctx?.waitUntil?.(Promise.all(writes).catch(() => {}));
+      response.headers?.set?.('X-Edge-Cache', 'MISS');
+      return response;
+    }
+    // Live call failed — fall back to the last good copy if we have one.
+    if (rule.stale && response.status >= 500) {
+      const stale = await caches.default.match(edgeCacheKey(request, 'stale'));
+      if (stale) {
+        console.warn('⚠️ serving stale edge copy for', new URL(request.url).pathname, 'live status', response.status);
+        const res = new Response(stale.body, stale);
+        res.headers.set('X-Edge-Cache', 'STALE');
+        return res;
+      }
+    }
+  } catch (e) {
+    console.warn('edge cache store failed:', e?.message);
+  }
+  return response;
+}
+
 // Main worker handler
 export default {
   // Cron trigger (wrangler.toml [triggers].crons) — the daily settlement payout
@@ -7920,8 +8024,16 @@ export default {
     }
     
     try {
-      const response = await router.handle(request, env, ctx);
-      
+      // Cached copies flow through the same CORS / security-header handling below.
+      const edge = edgeCachePolicy(request);
+      let response = edge ? await edgeCacheLookup(request, edge) : null;
+      if (!response) {
+        response = await router.handle(request, env, ctx);
+        if (edge && response) {
+          response = await edgeCacheStore(request, response, edge, ctx);
+        }
+      }
+
       // If no route matched, return 404 with CORS
       if (!response) {
         return new Response(JSON.stringify({
