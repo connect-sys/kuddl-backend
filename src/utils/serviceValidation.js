@@ -13,7 +13,7 @@
 
 export const MAX_SERVICE_NAME = 60;
 export const MIN_SERVICE_NAME = 3;
-export const MAX_AGE_BAND_WIDTH = 8; // years — "hard validation" (Screen D)
+export const MAX_AGE_BAND_WIDTH = 16; // years — partners may set any band within 0–16 (was 8)
 export const MAX_ADVENTURE_VARIANTS = 3; // PRD recommendation (3/3 caps)
 export const MAX_MONTHLY_PLANS = 3;
 
@@ -75,7 +75,7 @@ export function validateServiceName(name) {
 }
 
 /**
- * Age band: min < max, both non-negative integers, width ≤ 8 years.
+ * Age band: min < max, both non-negative integers, width ≤ MAX_AGE_BAND_WIDTH (16) years.
  * Error copy from Screen D: "Split wide ranges into separate batches —
  * parents don't book a class that mixes a 5-year-old with a 17-year-old."
  */

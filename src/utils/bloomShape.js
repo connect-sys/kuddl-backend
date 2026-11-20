@@ -81,10 +81,10 @@ function legacyPlanFromBatch(b) {
  */
 function shapeBatch(b, holidays = [], fallback = {}) {
   let ageBand = v.formatAgeBand({ ageMin: b.age_min, ageMax: b.age_max, openAbove: b.open_above });
-  // A band wider than 8 years is unrenderable (C5) → collapse to "Ages X+".
+  // A band wider than MAX_AGE_BAND_WIDTH (16 years) → collapse to "Ages X+".
   const aLo = Number(b.age_min);
   const aHi = Number(b.age_max);
-  if (Number.isFinite(aLo) && Number.isFinite(aHi) && aHi - aLo > 8) ageBand = `Ages ${aLo}+`;
+  if (Number.isFinite(aLo) && Number.isFinite(aHi) && aHi - aLo > v.MAX_AGE_BAND_WIDTH) ageBand = `Ages ${aLo}+`;
   const durationMinutes = v.deriveSessionDurationMinutes(b.start_time, b.end_time);
   const days = Array.isArray(b.days) ? b.days : (typeof b.days === 'string' && b.days ? JSON.parse(b.days) : []);
   const sessionCount = v.deriveSessionCount({
@@ -237,7 +237,7 @@ export function assembleBloom(raw = {}) {
       ageLabel = `Ages ${lo}+`;
     } else {
       const hi = Math.max(...ageMaxs);
-      ageLabel = hi - lo > 8 ? `Ages ${lo}+` : v.formatAgeBand({ ageMin: lo, ageMax: hi });
+      ageLabel = hi - lo > v.MAX_AGE_BAND_WIDTH ? `Ages ${lo}+` : v.formatAgeBand({ ageMin: lo, ageMax: hi });
     }
   }
 
