@@ -7,7 +7,7 @@ import jwt from '@tsndr/cloudflare-worker-jwt';
 import bcrypt from 'bcryptjs';
 import { addCorsHeaders } from '../utils/cors.js';
 import { getPublicR2Url } from '../utils/r2Utils.js';
-import { insertBatch } from './batchesController.js';
+import { insertBatch, isSingleBatchParent } from './batchesController.js';
 import { extractServiceExtras } from '../utils/helpers.js';
 import { validateServiceName, findBannedWords } from '../utils/serviceValidation.js';
 
@@ -678,9 +678,11 @@ export async function createService(request, env) {
     const batchIds = [];
     try {
       const f = (typeof features === 'object' && features) || {};
-      const scheds = Array.isArray(f.schedules) && f.schedules.length
+      let scheds = Array.isArray(f.schedules) && f.schedules.length
         ? f.schedules
         : [f.schedule || {}];
+      // Adventure / Care / Discover show one batch to customers: store one.
+      if (await isSingleBatchParent(env, 'service', serviceId)) scheds = scheds.slice(0, 1);
       for (const sched of scheds) {
         // Bloom v3 · Part A: mode is single-select per batch. Accept the new
         // single `sched.mode`, else fall back to the legacy `modes` array or a
@@ -2155,8 +2157,11 @@ export async function updateService(request, env) {
     try {
       const f = (updateData.features && typeof updateData.features === 'object')
         ? updateData.features : null;
-      const scheds = f && Array.isArray(f.schedules) && f.schedules.length
+      let scheds = f && Array.isArray(f.schedules) && f.schedules.length
         ? f.schedules : null;
+      // Single-batch categories keep one batch row (the first schedule, which
+      // is the one the customer page shows).
+      if (scheds && await isSingleBatchParent(env, 'service', serviceId)) scheds = scheds.slice(0, 1);
       if (scheds) {
         const existing = await env.KUDDL_DB.prepare(
           'SELECT booked_seats FROM batches WHERE parent_type = ? AND parent_id = ? ORDER BY created_at ASC'

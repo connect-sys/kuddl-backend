@@ -109,6 +109,50 @@ export async function insertBatch(env, data) {
   return id;
 }
 
+/**
+ * Single-batch rule. Customers see several batches only for Bloom; Adventure,
+ * Care and Discover (services and camps) show one. For those parents, adding
+ * a batch REPLACES the previous one instead of piling up rows: stale extra
+ * rows made listing cards show the wrong price (₹5 vs ₹5,000, ₹15k vs ₹12k).
+ */
+const MULTI_BATCH_CATEGORIES = new Set(['bloom', 'cat_bloom']);
+
+export async function isSingleBatchParent(env, parentType, parentId) {
+  const table = parentType === 'camp' ? 'camps' : parentType === 'service' ? 'services' : null;
+  if (!table || !parentId) return false;
+  const row = await env.KUDDL_DB.prepare(`SELECT category_id FROM ${table} WHERE id = ?`)
+    .bind(parentId).first();
+  // Unknown parent or no category: keep the old (multi-batch) behaviour.
+  if (!row || !row.category_id) return false;
+  return !MULTI_BATCH_CATEGORIES.has(String(row.category_id));
+}
+
+/**
+ * Insert the new batch, then remove every other batch of the same parent.
+ * A batch a booking points at is archived rather than deleted, so no booking
+ * ever loses its batch. booked_seats carries over to the new row.
+ */
+export async function replaceParentBatches(env, data) {
+  const { parent_type: parentType, parent_id: parentId } = data;
+  const old = (await env.KUDDL_DB.prepare(
+    'SELECT id, booked_seats FROM batches WHERE parent_type = ? AND parent_id = ?'
+  ).bind(parentType, parentId).all())?.results || [];
+  const carried = old.reduce((m, r) => Math.max(m, Number(r.booked_seats) || 0), 0);
+  const newId = await insertBatch(env, { ...data, booked_seats: data.booked_seats ?? carried });
+  const now = new Date().toISOString();
+  for (const r of old) {
+    const ref = await env.KUDDL_DB.prepare('SELECT 1 FROM bookings WHERE batch_id = ? LIMIT 1')
+      .bind(r.id).first();
+    if (ref) {
+      await env.KUDDL_DB.prepare("UPDATE batches SET status = 'archived', updated_at = ? WHERE id = ?")
+        .bind(now, r.id).run();
+    } else {
+      await env.KUDDL_DB.prepare('DELETE FROM batches WHERE id = ?').bind(r.id).run();
+    }
+  }
+  return newId;
+}
+
 // POST /api/batches
 export async function createBatch(request, env) {
   try {
@@ -126,7 +170,12 @@ export async function createBatch(request, env) {
     const providerId =
       user.role === 'admin' && body.provider_id ? body.provider_id : user.id;
 
-    const batchId = await insertBatch(env, { ...body, provider_id: providerId });
+    const data = { ...body, provider_id: providerId };
+    if (await isSingleBatchParent(env, body.parent_type, body.parent_id)) {
+      const batchId = await replaceParentBatches(env, data);
+      return json({ success: true, message: 'Batch updated (replaces the previous batch)', batchId, replaced: true }, 201);
+    }
+    const batchId = await insertBatch(env, data);
     return json({ success: true, message: 'Batch created', batchId }, 201);
   } catch (error) {
     console.error('createBatch error:', error);
@@ -280,6 +329,8 @@ export async function bulkBatchAction(request, env) {
           .bind(bid)
           .first();
         if (!row) continue;
+        // Single-batch parents keep exactly one batch: no copies.
+        if (await isSingleBatchParent(env, row.parent_type, row.parent_id)) continue;
         const copy = normalizeBatch(row);
         const newId = await insertBatch(env, {
           ...copy,
