@@ -2214,6 +2214,24 @@ export async function updateService(request, env) {
           });
           idx++;
         }
+      } else if (updateData.price !== undefined && updateData.price !== null && updateData.price !== '') {
+        // Single-price flows (Adventure, Discover, Care…) carry no schedules, so
+        // the block above never runs for them. Without this, the one batch made
+        // at create time kept its original price forever: a service created at
+        // ₹5 and edited to ₹5,000 still showed "₹5" on its listing card, which
+        // reads the cheapest batch. Keep that lone batch in step with the
+        // service price. Multi-batch services are owned by their schedules.
+        const newPrice = parseFloat(updateData.price);
+        if (Number.isFinite(newPrice) && newPrice >= 0) {
+          const cnt = await env.KUDDL_DB.prepare(
+            'SELECT COUNT(*) AS n FROM batches WHERE parent_type = ? AND parent_id = ?'
+          ).bind('service', serviceId).first();
+          if (Number(cnt?.n) === 1) {
+            await env.KUDDL_DB.prepare(
+              'UPDATE batches SET price = ?, updated_at = ? WHERE parent_type = ? AND parent_id = ?'
+            ).bind(newPrice, new Date().toISOString(), 'service', serviceId).run();
+          }
+        }
       }
     } catch (batchError) {
       console.error('⚠️ Service updated but batch re-sync failed:', batchError);
