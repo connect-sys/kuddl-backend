@@ -86,6 +86,8 @@ crons = ["0 2 * * *", "0 * * * *"]
 
 [env.development.vars]
 ENVIRONMENT = "development"
+# KLAY module (/api/klay/*) — on for dev only. Prod leaves it off.
+KLAY_ENABLED = "true"
 TWILIO_TEST_MODE = "true"
 R2_PUBLIC_URL = "https://devassets.kuddlkin.co"
 SENDGRID_FROM_EMAIL = "noreply@dev.kuddl.co"

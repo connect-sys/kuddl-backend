@@ -160,3 +160,6 @@ local.properties
 .dev.vars
 prod-dump.sql
 *.sql.bak
+
+# KLAY dev logins (generated)
+*.local.md

@@ -83,6 +83,7 @@ import * as mpinController from './controllers/mpinController.js';
 import * as contactController from './controllers/contactController.js';
 import * as serviceWizardController from './controllers/serviceWizardController.js';
 import bcrypt from 'bcryptjs';
+import { registerKlayRoutes } from './klay/klayRoutes.js';
 
 // Parse a JSON column safely — returns the fallback on null/invalid, never throws.
 function safeJsonParse(v, fallback) {
@@ -93,6 +94,9 @@ function safeJsonParse(v, fallback) {
 
 // Initialize router
 const router = Router();
+
+// KLAY module (Klub House by KLAY) — /api/klay/*. Inert unless KLAY_ENABLED=true.
+registerKlayRoutes(router);
 
 // Utility function to get partner folder path from partner ID
 function getPartnerFolderPath(partnerId) {
