@@ -99,7 +99,15 @@ export async function signStaffToken(env, staff) {
   const now = Math.floor(Date.now() / 1000);
   return jwt.sign({ klay: true, sid: staff.id, role: staff.role, iat: now, exp: now + TOKEN_TTL_S }, env.JWT_SECRET);
 }
-/** Returns the active klay_staff row for the bearer token, or null. */
+/**
+ * Returns the active klay_staff row for the bearer token, or null.
+ * Two kinds of token are accepted:
+ *  - a KLAY team token (City Manager / Centre Director / Coach), issued by
+ *    /api/klay/console/login or the KLAY phone-OTP verify;
+ *  - the HQ's normal Kuddl partner token (partner login / OTP): it maps to
+ *    the org's HQ row through klay_staff.provider_id.
+ * Either way the organisation must be active.
+ */
 export async function staffFromRequest(request, env) {
   const h = request.headers.get('Authorization') || '';
   if (!h.startsWith('Bearer ')) return null;
@@ -107,9 +115,16 @@ export async function staffFromRequest(request, env) {
   try {
     if (!(await jwt.verify(token, env.JWT_SECRET))) return null;
     const p = jwt.decode(token)?.payload || {};
-    if (!p.klay || !p.sid) return null;
-    const s = await first(env, "SELECT * FROM klay_staff WHERE id = ? AND status = 'active'", p.sid);
-    return s || null;
+    if (p.type === 'refresh') return null;
+    if (p.klay && p.sid) {
+      return (await first(env, `SELECT s.* FROM klay_staff s JOIN klay_orgs o ON o.id = s.org_id
+        WHERE s.id = ? AND s.status = 'active' AND o.status = 'active'`, p.sid)) || null;
+    }
+    if (p.id && (p.role === 'partner' || p.role === 'provider')) {
+      return (await first(env, `SELECT s.* FROM klay_staff s JOIN klay_orgs o ON o.id = s.org_id
+        WHERE s.provider_id = ? AND s.role = 'hq' AND s.status = 'active' AND o.status = 'active'`, p.id)) || null;
+    }
+    return null;
   } catch { return null; }
 }
 export function publicStaff(s) {
@@ -122,16 +137,16 @@ export function publicStaff(s) {
 // HQ sees everything; City Manager their city; Centre Director their centre;
 // Coach only their own classes (read-only).
 export function centreScopeSql(staff, alias = 'c') {
-  if (staff.role === 'hq') return { sql: '1=1', binds: [] };
-  if (staff.role === 'city') return { sql: `${alias}.city_id = ?`, binds: [staff.city_id] };
+  if (staff.role === 'hq') return { sql: `${alias}.org_id = ?`, binds: [staff.org_id] };
+  if (staff.role === 'city') return { sql: `${alias}.org_id = ? AND ${alias}.city_id = ?`, binds: [staff.org_id, staff.city_id] };
   return { sql: `${alias}.id = ?`, binds: [staff.centre_id] };
 }
 export async function canSeeCentre(env, staff, centreId) {
   if (!centreId) return false;
-  if (staff.role === 'hq') return true;
   if (staff.role === 'centre' || staff.role === 'coach') return staff.centre_id === centreId;
-  const c = await first(env, 'SELECT city_id FROM klay_centres WHERE id = ?', centreId);
-  return !!c && c.city_id === staff.city_id;
+  const c = await first(env, 'SELECT city_id, org_id FROM klay_centres WHERE id = ?', centreId);
+  if (!c || c.org_id !== staff.org_id) return false;
+  return staff.role === 'hq' || c.city_id === staff.city_id;
 }
 /** Can this staff member edit the centre's data (programmes, batches, seats, coaches)? */
 export async function canEditCentre(env, staff, centreId) {
@@ -143,9 +158,9 @@ export const isApprover = (staff) => staff.role === 'hq' || staff.role === 'city
 export async function audit(env, staff, action, entity, entityId, detail) {
   try {
     await run(env,
-      'INSERT INTO klay_audit_log (id, staff_id, staff_role, action, entity, entity_id, detail, created_at) VALUES (?,?,?,?,?,?,?,?)',
+      'INSERT INTO klay_audit_log (id, staff_id, staff_role, action, entity, entity_id, detail, created_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)',
       newId('kal'), staff?.id || null, staff?.role || null, action, entity || null, entityId || null,
-      detail ? JSON.stringify(detail) : null, nowIso());
+      detail ? JSON.stringify(detail) : null, nowIso(), staff?.org_id || null);
   } catch (e) { console.warn('klay audit failed', e?.message); }
 }
 

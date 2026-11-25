@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 
 const BASE = process.argv[2] || 'http://localhost:8799';
-const logins = Object.fromEntries([...fs.readFileSync(process.argv[3], 'utf8').matchAll(/\| [^|]+ \| (\S+) \| `([^`]+)` \|/g)].map((m) => [m[1], m[2]]));
+const logins = Object.fromEntries([...fs.readFileSync(process.argv[3], 'utf8').matchAll(/\| [^|]+ \| (\S+) \| \S+ \| `([^`]+)` \|/g)].map((m) => [m[1], m[2]]));
 let pass = 0, failN = 0;
 const check = (name, cond, extra) => { if (cond) { pass++; console.log('  ok  ', name); } else { failN++; console.log('  FAIL', name, extra !== undefined ? JSON.stringify(extra).slice(0, 300) : ''); } };
 async function api(method, path, { token, body, form } = {}) {
@@ -16,6 +16,8 @@ async function api(method, path, { token, body, form } = {}) {
   return { status: res.status, data: ct.includes('json') ? await res.json() : await res.text() };
 }
 const login = async (email, password) => (await api('POST', '/api/klay/console/login', { body: { email, password: password || logins[email] } })).data.token;
+// HQ = a normal Kuddl partner account: it signs in through the partner login.
+const partnerLogin = async (email) => (await api('POST', '/api/auth/login', { body: { email, password: logins[email] } })).data.token;
 
 console.log('\n# public pages');
 const home = await api('GET', '/api/klay/home');
@@ -47,11 +49,22 @@ check('booking lookup needs the phone', (await api('GET', `/api/klay/bookings/${
 check('booking lookup with phone', (await api('GET', `/api/klay/bookings/${demo.data.booking.reference}?phone=${parent(1).parent_phone}`)).data.booking?.status === 'confirmed');
 
 console.log('\n# console auth & scope');
-const hq = await login('hq@klay-dev.test');
+const hq = await partnerLogin('hq@klay-dev.test');
+check('HQ signs in with the partner login', !!hq);
+check('HQ partner token opens the KLAY console', (await api('GET', '/api/klay/console/me', { token: hq })).data.staff?.role === 'hq');
+check('HQ cannot use the team login', !(await login('hq@klay-dev.test')));
 const city_ = await login('pune@klay-dev.test');
 const dir = await login('kalyaninagar@klay-dev.test');
 const coach = await login('ananya@klay-dev.test');
 check('all four roles log in', hq && city_ && dir && coach);
+check('team phone is recognised for OTP', (await api('GET', '/api/klay/console/otp/check?phone=9999000003')).data.is_klay_team === true);
+check('partner phone is not a team phone', (await api('GET', '/api/klay/console/otp/check?phone=9999000001')).data.is_klay_team === false);
+check('team OTP send', (await api('POST', '/api/klay/console/otp/send', { body: { phone: '9999000003' } })).status === 200);
+const otpLogin = await api('POST', '/api/klay/console/otp/verify', { body: { phone: '9999000003', otp: '123456' } });
+check('team OTP verify -> Centre Director token', otpLogin.data.staff?.role === 'centre' && !!otpLogin.data.token, otpLogin.data);
+check('wrong OTP rejected', (await api('POST', '/api/klay/console/otp/verify', { body: { phone: '9999000003', otp: '12' } })).status === 400);
+const meHq = (await api('GET', '/api/klay/console/me', { token: hq })).data.staff;
+check('HQ sees plan usage 3 of 5 users, 1 of 1 centres', meHq.org?.users_used === 3 && meHq.org?.max_users === 5 && meHq.org?.centres_used === 1, meHq.org);
 check('wrong password rejected', (await api('POST', '/api/klay/console/login', { body: { email: 'hq@klay-dev.test', password: 'nope' } })).status === 401);
 check('no token -> 401', (await api('GET', '/api/klay/console/overview')).status === 401);
 const ov = (await api('GET', '/api/klay/console/overview', { token: hq })).data;
@@ -109,20 +122,19 @@ check('award L1 certificate', !!aw.data.certificate_no, aw.data);
 check('certificate verifies publicly', (await api('GET', `/api/klay/certificates/${aw.data.certificate_no}`)).data.certificate?.level_name === 'Stage 1');
 const csv = await api('GET', '/api/klay/console/bookings/export', { token: hq });
 check('CSV export', typeof csv.data === 'string' && csv.data.startsWith('Reference,'), String(csv.data).slice(0, 80));
-const reg = await api('POST', '/api/klay/onboard/register', { body: { centre_name: 'KLAY Baner', city: 'Pune', area: 'Baner', director_name: 'Test Director', phone: '9876500000', email: 'baner@klay-dev.test', password: 'baner-pass-123', agree: true } });
-check('self-serve centre registration', reg.data.success, reg.data);
-const baner = await login('baner@klay-dev.test', 'baner-pass-123');
-const banerMe = (await api('GET', '/api/klay/console/me', { token: baner })).data.staff;
-check('new director scoped to own centre', banerMe.centre?.name === 'KLAY Baner' && banerMe.centre.status === 'onboarding');
-check('cannot see Kalyani Nagar', (await api('GET', '/api/klay/console/centres/kce_kalyaninagar', { token: baner })).status === 404);
-check('submit needs a programme first', (await api('POST', `/api/klay/console/centres/${banerMe.centre_id}/submit`, { token: baner, body: { agree: true } })).status === 400);
-await api('POST', '/api/klay/console/programmes', { token: baner, body: { centre_id: banerMe.centre_id, club_id: clubs[1].id, age_min: 4, age_max: 10, batch: { days: ['mon', 'wed'], start_time: '16:00', end_time: '17:00', capacity: 15 }, plans: { monthly_price: 2800 } } });
-check('submit -> pending', (await api('POST', `/api/klay/console/centres/${banerMe.centre_id}/submit`, { token: baner, body: { agree: true } })).data.status === 'pending');
-check('not public before approval', (await api('GET', '/api/klay/cities/pune/baner')).status === 404);
-const ca = (await api('GET', '/api/klay/console/approvals', { token: city_ })).data.approvals.find((a) => a.type === 'centre');
-await api('POST', `/api/klay/console/approvals/${ca.id}/decide`, { token: city_, body: { decision: 'approve' } });
-check('approved centre goes live with its programme', (await api('GET', '/api/klay/cities/pune/baner')).data.programmes?.length === 1);
-check('city page now shows 2 centres', (await api('GET', '/api/klay/cities/pune')).data.centres.length === 2);
+check('self-serve registration is off', (await api('POST', '/api/klay/onboard/register', { body: {} })).status === 404);
+const over = await api('POST', '/api/klay/console/centres', { token: hq, body: { city_id: 'kcy_pune', name: 'KLAY Baner', area: 'Baner' } });
+check('centre limit enforced (plan allows 1)', over.status === 403 && over.data.limit === 'centres', over.data);
+check('director cannot add centres', (await api('POST', '/api/klay/console/centres', { token: dir, body: { city_id: 'kcy_pune', name: 'X Centre', area: 'X' } })).status === 403);
+const addUser = (i) => api('POST', '/api/klay/console/staff', { token: hq, body: { role: 'coach', name: `Coach ${i}`, email: `coach${i}@klay-dev.test`, phone: `99990001${String(i).padStart(2, '0')}`, password: 'coach-pass-123', centre_id: 'kce_kalyaninagar', coach_id: 'kco_ananya' } });
+check('HQ adds team member 4 of 5', (await addUser(1)).status === 200);
+check('HQ adds team member 5 of 5', (await addUser(2)).status === 200);
+const full6 = await addUser(3);
+check('seat limit enforced at 5 users', full6.status === 403 && full6.data.limit === 'users', full6.data);
+check('duplicate phone rejected', (await api('POST', '/api/klay/console/staff', { token: hq, body: { role: 'coach', name: 'Dup', email: 'dup@klay-dev.test', phone: '9999000003', password: 'coach-pass-123', centre_id: 'kce_kalyaninagar', coach_id: 'kco_ananya' } })).status === 409);
+check('partner phone cannot be a team member', (await api('POST', '/api/klay/console/staff', { token: hq, body: { role: 'coach', name: 'Partner Phone', email: 'p2@klay-dev.test', phone: '9999000001', password: 'coach-pass-123', centre_id: 'kce_kalyaninagar', coach_id: 'kco_ananya' } })).status === 409);
+check('city manager sees only centre & coach logins', (await api('GET', '/api/klay/console/staff', { token: city_ })).data.staff.every((x) => ['centre', 'coach'].includes(x.role)));
+check('admin switch needs an admin token', (await api('PUT', '/api/klay/admin/orgs/prov_klay_hq_dev', { token: hq, body: {} })).status === 403);
 check('audit log has entries', (await api('GET', '/api/klay/console/audit', { token: hq })).data.entries.length > 10);
 
 console.log(`\n${pass} passed, ${failN} failed`);

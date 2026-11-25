@@ -3,6 +3,8 @@
 // Every handler resolves the logged-in klay_staff row and scopes reads and
 // writes to that role's slice. Every change is written to klay_audit_log.
 // =====================================================================
+import TwilioService from '../utils/twilioService.js';
+import jwtLib from '@tsndr/cloudflare-worker-jwt';
 import {
   ok, fail, json, body, nowIso, newId, shortCode, slugify, parseJson, all, first, run,
   hashPassword, verifyPassword, signStaffToken, staffFromRequest, publicStaff,
@@ -27,7 +29,9 @@ export function withStaff(handler, roles = ROLES) {
 export async function login(request, env) {
   const b = await body(request);
   const email = String(b.email || '').trim().toLowerCase();
-  const s = await first(env, 'SELECT * FROM klay_staff WHERE email = ?', email);
+  // HQ signs in with its normal Kuddl partner account; this is for the team.
+  const s = await first(env, `SELECT s.* FROM klay_staff s JOIN klay_orgs o ON o.id = s.org_id
+    WHERE s.email = ? AND s.role != 'hq' AND o.status = 'active'`, email);
   if (!s || s.status !== 'active' || !(await verifyPassword(String(b.password || ''), s.password_hash))) {
     return fail('Wrong email or password', 401);
   }
@@ -39,6 +43,14 @@ async function describeStaff(env, s) {
   const out = { ...publicStaff(s), role_label: ROLE_LABEL[s.role] };
   if (s.city_id) out.city = await first(env, 'SELECT id, slug, name FROM klay_cities WHERE id = ?', s.city_id);
   if (s.centre_id) out.centre = await first(env, 'SELECT id, slug, name, status, city_id FROM klay_centres WHERE id = ?', s.centre_id);
+  if (s.org_id) {
+    const o = await first(env, 'SELECT id, name, brand_name, plan_label, max_users, max_centres, status FROM klay_orgs WHERE id = ?', s.org_id);
+    if (o) {
+      const users = (await first(env, "SELECT COUNT(*) AS n FROM klay_staff WHERE org_id = ? AND role != 'hq' AND status = 'active'", o.id)).n;
+      const centres = (await first(env, 'SELECT COUNT(*) AS n FROM klay_centres WHERE org_id = ?', o.id)).n;
+      out.org = { ...o, users_used: users, centres_used: centres };
+    }
+  }
   return out;
 }
 export const me = withStaff(async (request, env, staff) => ok({ staff: await describeStaff(env, staff) }));
@@ -133,8 +145,10 @@ export const overview = withStaff(async (request, env, staff) => {
   // Funnel (last 30 days), scoped to the visible centres / city.
   const since = new Date(Date.now() - 30 * 864e5).toISOString();
   let funnel = { page_view: 0, centre_view: 0, booking_start: 0, paid: 0 };
-  const scopeSql = staff.role === 'hq' ? '1=1' : staff.role === 'city' ? 'city_id = ?' : 'centre_id = ?';
-  const scopeBind = staff.role === 'hq' ? [] : staff.role === 'city' ? [staff.city_id] : [staff.centre_id];
+  const scopeSql = staff.role === 'centre' || staff.role === 'coach' ? 'centre_id = ?'
+    : staff.role === 'city' ? 'centre_id IN (SELECT id FROM klay_centres WHERE org_id = ? AND city_id = ?)'
+    : 'centre_id IN (SELECT id FROM klay_centres WHERE org_id = ?)';
+  const scopeBind = staff.role === 'centre' || staff.role === 'coach' ? [staff.centre_id] : staff.role === 'city' ? [staff.org_id, staff.city_id] : [staff.org_id];
   const fr = await all(env, `SELECT event, COUNT(*) AS n FROM klay_events WHERE created_at >= ? AND (${scopeSql}) GROUP BY event`, since, ...scopeBind);
   for (const r of fr) funnel[r.event] = r.n;
 
@@ -145,7 +159,7 @@ export const overview = withStaff(async (request, env, staff) => {
     byCity[r.city].centres += 1; byCity[r.city].enrolled += r.enrolled;
   }
   const pendingApprovals = isApprover(staff)
-    ? (await first(env, `SELECT COUNT(*) AS n FROM klay_approvals WHERE status = 'pending' ${staff.role === 'city' ? 'AND city_id = ?' : ''}`, ...(staff.role === 'city' ? [staff.city_id] : []))).n
+    ? (await first(env, `SELECT COUNT(*) AS n FROM klay_approvals WHERE status = 'pending' AND org_id = ? ${staff.role === 'city' ? 'AND city_id = ?' : ''}`, staff.org_id, ...(staff.role === 'city' ? [staff.city_id] : []))).n
     : 0;
   return ok({
     kpis: {
@@ -224,15 +238,18 @@ export const createCentre = withStaff(async (request, env, staff) => {
   }
   if (!cityId || !(await first(env, 'SELECT id FROM klay_cities WHERE id = ?', cityId))) return fail('Pick a city');
   if (String(b.name || '').trim().length < 3) return fail('Enter the centre name');
+  const org = await first(env, 'SELECT max_centres FROM klay_orgs WHERE id = ?', staff.org_id);
+  const used = (await first(env, 'SELECT COUNT(*) AS n FROM klay_centres WHERE org_id = ?', staff.org_id)).n;
+  if (org && used >= org.max_centres) return fail(`Your plan allows ${org.max_centres} centre${org.max_centres === 1 ? '' : 's'}. Ask Kuddl to upgrade your plan to add more.`, 403, { limit: 'centres' });
   let slug = slugify(b.area || String(b.name).replace(/^klay\s+/i, ''));
   if (await first(env, 'SELECT id FROM klay_centres WHERE city_id = ? AND slug = ?', cityId, slug)) slug = `${slug}-${shortCode(3).toLowerCase()}`;
   const id = newId('kce');
-  await run(env, `INSERT INTO klay_centres (id, city_id, slug, name, area, address, pincode, hours_note, director_name, director_phone, director_email, status, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, cityId, slug, String(b.name).trim(), b.area || null, b.address || null, b.pincode || null,
-    b.hours_note || 'after-school, from 4 PM', b.director_name || null, b.director_phone || null, b.director_email || null, 'onboarding', t, t);
+  await run(env, `INSERT INTO klay_centres (id, city_id, slug, name, area, address, pincode, hours_note, director_name, director_phone, director_email, status, created_at, updated_at, org_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, cityId, slug, String(b.name).trim(), b.area || null, b.address || null, b.pincode || null,
+    b.hours_note || 'after-school, from 4 PM', b.director_name || null, b.director_phone || null, b.director_email || null, 'onboarding', t, t, staff.org_id);
   await audit(env, staff, 'centre.create', 'centre', id, { name: b.name });
   return ok({ id });
-});
+}, ['hq', 'city']);
 
 // POST /api/klay/console/centres/:id/submit — onboarding form "Submit & go live".
 export const submitCentre = withStaff(async (request, env, staff, id) => {
@@ -250,8 +267,8 @@ export const submitCentre = withStaff(async (request, env, staff, id) => {
   } else {
     await run(env, "UPDATE klay_centres SET status = CASE WHEN status = 'live' THEN 'live' ELSE 'pending' END, agreement_signed_at = ?, agreement_signed_by = ?, submitted_at = ?, updated_at = ? WHERE id = ?", t, staff.id, t, t, id);
     if (c.status !== 'live' && !(await first(env, "SELECT id FROM klay_approvals WHERE type = 'centre' AND ref_id = ? AND status = 'pending'", id))) {
-      await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        newId('kap'), 'centre', id, id, c.city_id, JSON.stringify({ name: c.name }), 'pending', staff.id, t);
+      await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        newId('kap'), 'centre', id, id, c.city_id, JSON.stringify({ name: c.name }), 'pending', staff.id, t, staff.org_id);
     }
   }
   await audit(env, staff, 'centre.submit', 'centre', id);
@@ -302,8 +319,8 @@ export const createProgramme = withStaff(async (request, env, staff) => {
     newId('kbt'), id, JSON.stringify(normDays(bt.days)), bt.start_time, bt.end_time, amin, amax, Number(bt.capacity), Number(bt.booked_offline || 0), 'live', t, t);
   await createDefaultPlans(env, id, b.plans || {});
   if (needsApproval) {
-    await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      newId('kap'), 'programme', id, b.centre_id, centre.city_id, JSON.stringify({ name, centre: centre.name }), 'pending', staff.id, t);
+    await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      newId('kap'), 'programme', id, b.centre_id, centre.city_id, JSON.stringify({ name, centre: centre.name }), 'pending', staff.id, t, staff.org_id);
   }
   await audit(env, staff, 'programme.create', 'programme', id, { name, centre_id: b.centre_id, status });
   return ok({ id, status });
@@ -428,8 +445,8 @@ export const updatePlan = withStaff(async (request, env, staff, id) => {
     return ok({ applied: true });
   }
   await run(env, "UPDATE klay_approvals SET status = 'rejected', decided_by = ?, decided_at = ?, note = 'Superseded' WHERE type = 'price' AND ref_id = ? AND status = 'pending'", staff.id, t, id);
-  await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    newId('kap'), 'price', id, pl.centre_id, pl.city_id, JSON.stringify({ old_price: pl.price, new_price: price, plan: pl.label }), 'pending', staff.id, t);
+  await run(env, 'INSERT INTO klay_approvals (id, type, ref_id, centre_id, city_id, payload, status, requested_by, created_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    newId('kap'), 'price', id, pl.centre_id, pl.city_id, JSON.stringify({ old_price: pl.price, new_price: price, plan: pl.label }), 'pending', staff.id, t, staff.org_id);
   await audit(env, staff, 'plan.price.request', 'plan', id, { from: pl.price, to: price });
   return ok({ applied: false, message: 'Price change sent to your City Manager for approval' });
 });
@@ -437,7 +454,7 @@ export const updatePlan = withStaff(async (request, env, staff, id) => {
 // ------------------------------------------------------------ approvals
 export const listApprovals = withStaff(async (request, env, staff) => {
   const status = new URL(request.url).searchParams.get('status') || 'pending';
-  const sc = staff.role === 'hq' ? { sql: '1=1', binds: [] } : staff.role === 'city' ? { sql: 'a.city_id = ?', binds: [staff.city_id] } : { sql: 'a.centre_id = ?', binds: [staff.centre_id] };
+  const sc = staff.role === 'hq' ? { sql: 'a.org_id = ?', binds: [staff.org_id] } : staff.role === 'city' ? { sql: 'a.org_id = ? AND a.city_id = ?', binds: [staff.org_id, staff.city_id] } : { sql: 'a.centre_id = ?', binds: [staff.centre_id] };
   const rows = await all(env, `SELECT a.*, c.name AS centre_name, s.name AS requested_by_name FROM klay_approvals a LEFT JOIN klay_centres c ON c.id = a.centre_id LEFT JOIN klay_staff s ON s.id = a.requested_by
     WHERE ${sc.sql} AND a.status = ? ORDER BY a.created_at DESC LIMIT 200`, ...sc.binds, status);
   return ok({ approvals: rows.map((r) => ({ ...r, payload: parseJson(r.payload, {}) })) });
@@ -446,6 +463,7 @@ export const listApprovals = withStaff(async (request, env, staff) => {
 export const decideApproval = withStaff(async (request, env, staff, id) => {
   const a = await first(env, 'SELECT * FROM klay_approvals WHERE id = ?', id);
   if (!a || a.status !== 'pending') return fail('This request is no longer pending', 404);
+  if (a.org_id !== staff.org_id) return fail('This request is no longer pending', 404);
   if (staff.role === 'city' && a.city_id !== staff.city_id) return fail('Not in your city', 403);
   const b = await body(request);
   const approve = b.decision === 'approve';
@@ -597,8 +615,8 @@ async function refreshCoachStatus(env, coachId, by) {
 
 // ------------------------------------------------------------ bookings
 function bookingScope(staff) {
-  if (staff.role === 'hq') return { sql: '1=1', binds: [] };
-  if (staff.role === 'city') return { sql: 'k.city_id = ?', binds: [staff.city_id] };
+  if (staff.role === 'hq') return { sql: 'k.centre_id IN (SELECT id FROM klay_centres WHERE org_id = ?)', binds: [staff.org_id] };
+  if (staff.role === 'city') return { sql: 'k.centre_id IN (SELECT id FROM klay_centres WHERE org_id = ? AND city_id = ?)', binds: [staff.org_id, staff.city_id] };
   if (staff.role === 'coach') return { sql: 'p.coach_id = ?', binds: [staff.coach_id] };
   return { sql: 'k.centre_id = ?', binds: [staff.centre_id] };
 }
@@ -692,21 +710,30 @@ export const revenue = withStaff(async (request, env, staff) => {
 
 // ------------------------------------------------------------ staff & cities (HQ / City)
 export const listStaff = withStaff(async (request, env, staff) => {
-  const where = staff.role === 'hq' ? '1=1' : 's.city_id = ?';
-  const rows = await all(env, `SELECT s.*, ci.name AS city_name, c.name AS centre_name FROM klay_staff s LEFT JOIN klay_cities ci ON ci.id = s.city_id LEFT JOIN klay_centres c ON c.id = s.centre_id WHERE ${where} ORDER BY s.role, s.name`, ...(staff.role === 'hq' ? [] : [staff.city_id]));
+  const where = staff.role === 'hq' ? 's.org_id = ?' : "s.org_id = ? AND s.city_id = ? AND s.role IN ('centre','coach')";
+  const rows = await all(env, `SELECT s.*, ci.name AS city_name, c.name AS centre_name FROM klay_staff s LEFT JOIN klay_cities ci ON ci.id = s.city_id LEFT JOIN klay_centres c ON c.id = s.centre_id WHERE ${where} ORDER BY s.role, s.name`, ...(staff.role === 'hq' ? [staff.org_id] : [staff.org_id, staff.city_id]));
   return ok({ staff: rows.map((r) => ({ ...publicStaff(r), role_label: ROLE_LABEL[r.role] })) });
 }, ['hq', 'city']);
 
 export const createStaff = withStaff(async (request, env, staff) => {
   const b = await body(request);
   const role = String(b.role || '');
-  const allowedRoles = staff.role === 'hq' ? ['hq', 'city', 'centre', 'coach'] : ['centre', 'coach'];
+  const allowedRoles = staff.role === 'hq' ? ['city', 'centre', 'coach'] : ['centre', 'coach'];
   if (!allowedRoles.includes(role)) return fail('You cannot create this kind of account', 403);
   const email = String(b.email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) return fail('Enter a valid email');
   if (String(b.name || '').trim().length < 2) return fail('Enter a name');
   if (String(b.password || '').length < 8) return fail('Password must be at least 8 characters');
+  const phone = String(b.phone || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+  if (!/^[6-9]\d{9}$/.test(phone)) return fail('Enter a valid 10-digit mobile number (used for Phone OTP login)');
   if (await first(env, 'SELECT id FROM klay_staff WHERE email = ?', email)) return fail('This email already has an account', 409);
+  if (await first(env, 'SELECT id FROM klay_staff WHERE phone = ?', phone)) return fail('This mobile number already has an account', 409);
+  if (await first(env, 'SELECT id FROM providers WHERE phone = ? OR phone = ? OR email = ?', phone, `+91${phone}`, email)) {
+    return fail('This mobile or email is already a Kuddl partner account — use a different one for this team member', 409);
+  }
+  const org = await first(env, 'SELECT max_users FROM klay_orgs WHERE id = ?', staff.org_id);
+  const used = (await first(env, "SELECT COUNT(*) AS n FROM klay_staff WHERE org_id = ? AND role != 'hq' AND status = 'active'", staff.org_id)).n;
+  if (org && used >= org.max_users) return fail(`Your plan includes ${org.max_users} team logins and all are in use. Disable one, or ask Kuddl to upgrade your plan.`, 403, { limit: 'users' });
   let cityId = null, centreId = null, coachId = null;
   if (role === 'city') {
     cityId = b.city_id;
@@ -723,17 +750,22 @@ export const createStaff = withStaff(async (request, env, staff) => {
     coachId = co.id;
   }
   const id = newId('kst'); const t = nowIso();
-  await run(env, 'INSERT INTO klay_staff (id, name, email, phone, role, city_id, centre_id, coach_id, password_hash, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    id, String(b.name).trim(), email, b.phone || null, role, cityId, centreId, coachId, await hashPassword(String(b.password)), 'active', t, t);
+  await run(env, 'INSERT INTO klay_staff (id, name, email, phone, role, city_id, centre_id, coach_id, password_hash, status, created_at, updated_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    id, String(b.name).trim(), email, phone, role, cityId, centreId, coachId, await hashPassword(String(b.password)), 'active', t, t, staff.org_id);
   await audit(env, staff, 'staff.create', 'staff', id, { role, email });
   return ok({ id });
 }, ['hq', 'city']);
 
 export const updateStaff = withStaff(async (request, env, staff, id) => {
   const s = await first(env, 'SELECT * FROM klay_staff WHERE id = ?', id);
-  if (!s || (staff.role === 'city' && s.city_id !== staff.city_id) || (staff.role === 'city' && ['hq', 'city'].includes(s.role))) return fail('Not found', 404);
+  if (!s || s.org_id !== staff.org_id || s.role === 'hq' || (staff.role === 'city' && (s.city_id !== staff.city_id || s.role === 'city'))) return fail('Not found', 404);
   if (s.id === staff.id) return fail('You cannot change your own account here');
   const b = await body(request);
+  if (b.status === 'active' && s.status !== 'active') {
+    const org = await first(env, 'SELECT max_users FROM klay_orgs WHERE id = ?', staff.org_id);
+    const used = (await first(env, "SELECT COUNT(*) AS n FROM klay_staff WHERE org_id = ? AND role != 'hq' AND status = 'active'", staff.org_id)).n;
+    if (org && used >= org.max_users) return fail(`All ${org.max_users} team logins on your plan are in use.`, 403, { limit: 'users' });
+  }
   if (b.status && ['active', 'disabled'].includes(b.status)) await run(env, 'UPDATE klay_staff SET status = ?, updated_at = ? WHERE id = ?', b.status, nowIso(), id);
   if (b.password) {
     if (String(b.password).length < 8) return fail('Password must be at least 8 characters');
@@ -777,8 +809,96 @@ export const createClub = withStaff(async (request, env, staff) => {
 }, ['hq']);
 
 export const auditLog = withStaff(async (request, env, staff) => {
-  const rows = await all(env, `SELECT a.*, s.name AS staff_name FROM klay_audit_log a LEFT JOIN klay_staff s ON s.id = a.staff_id ORDER BY a.created_at DESC LIMIT 300`);
+  const rows = await all(env, `SELECT a.*, s.name AS staff_name FROM klay_audit_log a LEFT JOIN klay_staff s ON s.id = a.staff_id WHERE a.org_id = ? ORDER BY a.created_at DESC LIMIT 300`, staff.org_id);
   return ok({ entries: rows.map((r) => ({ ...r, detail: parseJson(r.detail, null) })) });
 }, ['hq']);
 
 export { json };
+
+// ------------------------------------------------------------ team phone OTP
+// Same Phone OTP tab as every partner. The login page first asks /otp/check;
+// a KLAY team number then sends/verifies here (Twilio Verify), so it never
+// reaches the partner OTP flow, which would create a new partner account.
+const tenDigits = (p) => String(p || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+async function teamByPhone(env, phone) {
+  return first(env, `SELECT s.* FROM klay_staff s JOIN klay_orgs o ON o.id = s.org_id
+    WHERE s.phone = ? AND s.role != 'hq' AND s.status = 'active' AND o.status = 'active'`, tenDigits(phone));
+}
+export async function otpCheck(request, env) {
+  const phone = new URL(request.url).searchParams.get('phone');
+  return ok({ is_klay_team: !!(await teamByPhone(env, phone)) });
+}
+export async function otpSend(request, env) {
+  const b = await body(request);
+  const s = await teamByPhone(env, b.phone);
+  if (!s) return fail('This number is not on a KLAY team', 404);
+  try { await new TwilioService(env).sendOTP(`+91${tenDigits(b.phone)}`); }
+  catch { return fail('Could not send the OTP. Please try again.', 502); }
+  return ok({ message: 'OTP sent' });
+}
+export async function otpVerify(request, env) {
+  const b = await body(request);
+  const s = await teamByPhone(env, b.phone);
+  if (!s) return fail('This number is not on a KLAY team', 404);
+  let res;
+  try { res = await new TwilioService(env).verifyOTP(`+91${tenDigits(b.phone)}`, String(b.otp || '')); }
+  catch { return fail('Could not verify the OTP. Please try again.', 502); }
+  if (res?.status !== 'approved') return fail('Invalid OTP', 400);
+  await run(env, 'UPDATE klay_staff SET last_login_at = ? WHERE id = ?', nowIso(), s.id);
+  return ok({ token: await signStaffToken(env, s), staff: await describeStaff(env, s) });
+}
+
+// ------------------------------------------------------------ Kuddl admin: org switch
+// Admin turns a normal partner account into a KLAY-model (multi-centre) org
+// and sets the subscription limits. Admin token = the partner portal admin login.
+async function isAdmin(request, env) {
+  const h = request.headers.get('Authorization') || '';
+  if (!h.startsWith('Bearer ')) return false;
+  try {
+    if (!(await jwtVerify(h.slice(7), env))) return false;
+    return (jwtDecode(h.slice(7))?.payload || {}).role === 'admin';
+  } catch { return false; }
+}
+const jwtVerify = (t, env) => jwtLib.verify(t, env.JWT_SECRET);
+const jwtDecode = (t) => jwtLib.decode(t);
+
+export async function adminGetOrg(request, env, providerId) {
+  if (!(await isAdmin(request, env))) return fail('Admin only', 403);
+  const o = await first(env, 'SELECT * FROM klay_orgs WHERE provider_id = ?', providerId);
+  if (!o) return ok({ org: null });
+  const users = (await first(env, "SELECT COUNT(*) AS n FROM klay_staff WHERE org_id = ? AND role != 'hq' AND status = 'active'", o.id)).n;
+  const centres = (await first(env, 'SELECT COUNT(*) AS n FROM klay_centres WHERE org_id = ?', o.id)).n;
+  return ok({ org: { ...o, users_used: users, centres_used: centres } });
+}
+
+export async function adminSetOrg(request, env, providerId) {
+  if (!(await isAdmin(request, env))) return fail('Admin only', 403);
+  const p = await first(env, 'SELECT id, email, phone, name, business_name FROM providers WHERE id = ?', providerId);
+  if (!p) return fail('Partner not found', 404);
+  const b = await body(request);
+  const maxUsers = Math.max(0, Math.min(1000, Math.round(Number(b.max_users ?? 5))));
+  const maxCentres = Math.max(1, Math.min(1000, Math.round(Number(b.max_centres ?? 1))));
+  const name = String(b.name || p.business_name || 'KLAY').trim().slice(0, 80);
+  const t = nowIso();
+  let o = await first(env, 'SELECT * FROM klay_orgs WHERE provider_id = ?', providerId);
+  if (!o) {
+    o = { id: newId('korg') };
+    await run(env, `INSERT INTO klay_orgs (id, provider_id, name, brand_name, status, plan_label, max_users, max_centres, enabled_by, enabled_at, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, o.id, providerId, name, b.brand_name || null, b.enabled === false ? 'disabled' : 'active',
+      b.plan_label || null, maxUsers, maxCentres, 'admin', t, t, t);
+  } else {
+    await run(env, 'UPDATE klay_orgs SET name = ?, brand_name = COALESCE(?, brand_name), status = ?, plan_label = ?, max_users = ?, max_centres = ?, updated_at = ? WHERE id = ?',
+      name, b.brand_name || null, b.enabled === false ? 'disabled' : 'active', b.plan_label || null, maxUsers, maxCentres, t, o.id);
+  }
+  // The HQ row that maps the partner account into the KLAY console.
+  const hq = await first(env, "SELECT id FROM klay_staff WHERE provider_id = ? AND role = 'hq'", providerId);
+  if (!hq) {
+    const hqName = p.name || name;
+    // Unusable random password: HQ always signs in through the partner login.
+    const randomPw = [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16)).join('');
+    await run(env, `INSERT INTO klay_staff (id, name, email, phone, role, password_hash, status, created_at, updated_at, org_id, provider_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, newId('kst'), hqName, p.email || `${providerId}@partner.kuddl`, null, 'hq',
+      await hashPassword(randomPw), 'active', t, t, o.id, providerId);
+  }
+  return adminGetOrg(request, env, providerId);
+}

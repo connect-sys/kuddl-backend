@@ -36,11 +36,16 @@ export function registerKlayRoutes(router) {
   router.get('/api/klay/bookings/:reference', P((r, e, ref) => pub.getBooking(r, e, ref)));
   router.post('/api/klay/waitlist', P(pub.joinWaitlist));
   router.get('/api/klay/certificates/:no', P((r, e, no) => pub.certificate(r, e, no)));
-  router.post('/api/klay/onboard/register', P(pub.registerCentre));
+  // Centres are added by the org's HQ / City Manager now (seat-limited), not self-registered.
 
   // ---------------- console (HQ / City / Centre / Coach)
   const C = '/api/klay/console';
   router.post(`${C}/login`, P(con.login));
+  router.get(`${C}/otp/check`, P(con.otpCheck));
+  router.post(`${C}/otp/send`, P(con.otpSend));
+  router.post(`${C}/otp/verify`, P(con.otpVerify));
+  router.get('/api/klay/admin/orgs/:providerId', P((r, e, id) => con.adminGetOrg(r, e, id)));
+  router.put('/api/klay/admin/orgs/:providerId', P((r, e, id) => con.adminSetOrg(r, e, id)));
   router.get(`${C}/me`, P(con.me));
   router.post(`${C}/password`, P(con.changePassword));
   router.get(`${C}/overview`, P(con.overview));
